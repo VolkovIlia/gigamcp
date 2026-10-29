@@ -112,6 +112,12 @@ try {
   assert.ok(sentN.some((x) => x.startsWith('[MCP-НАПОМИНАНИЕ]')), 'напоминание отправлено');
   ok('отказ «нет доступа» → напоминание → модель вызвала инструмент');
 
+  // ГигаЧат ушёл во встроенные навыки («Ошибка при вызове инструмента») → тоже напоминание
+  await page.locator('#chat-input-textarea').fill('Дай список дел');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.__sent.filter((x) => x.startsWith('[MCP-НАПОМИНАНИЕ]')).length >= 2 && window.__sent.filter((x) => x.startsWith('[MCP-РЕЗУЛЬТАТ]')).length >= 4, null, { timeout: 25000 });
+  ok('«Ошибка при вызове инструмента» (встроенные навыки) → напоминание → вызов');
+
   // перезагрузка: история не выполняется повторно
   await page.reload();
   await page.locator('[data-gmcp=chip] .chip').waitFor();

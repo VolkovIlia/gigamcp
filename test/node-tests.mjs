@@ -187,6 +187,32 @@ await test('Подбор инструментов под запрос и нап�
   assert.ok(!P.looksLikeRefusal('Вот ваши задачи на сегодня: 1. Купить молоко'));
   assert.match(P.buildNudge(srv, 'задачи'), /^\[MCP-НАПОМИНАНИЕ\][\s\S]*taska\/tasks_list/);
 });
+await test('Большой сервер как Taska: «taska_*» не путается с «task», каталог короткий', () => {
+  const obj = (props = {}, required = []) => ({ type: 'object', properties: props, required });
+  const tools = [
+    { name: 'taska_guide', description: 'Guide to Taska for agents: how tasks, goals and projects fit together.', inputSchema: obj() },
+    { name: 'taska_briefing', description: 'Briefing: what needs attention in Taska today, tasks and goals.', inputSchema: obj() },
+    { name: 'tasks_create', description: 'Create a task.', inputSchema: obj({ title: { type: 'string' } }, ['title']) },
+    { name: 'tasks_list', description: 'List tasks with filters.', inputSchema: obj({ status: { type: 'string' }, due: { type: 'string' } }) },
+    { name: 'tasks_get', description: 'Get one task.', inputSchema: obj({ id: { type: 'string' } }, ['id']) },
+    { name: 'calendar_agenda', description: 'Agenda for a day.', inputSchema: obj({ date: { type: 'string' } }) },
+  ];
+  for (let i = 0; i < 240; i++) tools.push({ name: `module${i}_action_item`, description: `Does a thing number ${i} with a fairly long description so that the full catalog is big.`, inputSchema: obj({ x: { type: 'string', description: 'some parameter' } }) });
+  const srv = [{ id: 'taska_stage', name: 'Taska-stage', tools }];
+  const q = 'Какие у меня задачи на сегодня на Taska';
+  const ranked = P.rankTools(srv, q);
+  assert.equal(ranked[0].tool.name, 'tasks_list');
+  const c = P.buildContext(srv, { query: q });
+  assert.ok(c.compact);
+  assert.ok(c.text.length < 14000, `контекст ${c.text.length} символов`);
+  assert.match(c.text, /```mcp\n\{"call": "taska_stage\/tasks_list", "arguments": \{\}\}\n```/);
+  assert.match(c.text, /module239_action_item/);
+  assert.match(c.text, /твой ответ — только блок кода mcp[\s\S]*\[\/MCP-КОНТЕКСТ\]$/);
+  assert.equal(P.nudgeReason('Ошибка при вызове инструмента. Ответ: Этот запрос относится к поиску данных в системе управления задачами.', srv, q), 'deflect');
+  assert.equal(P.nudgeReason('Вот что я нашёл в интернете про задачи.', srv, q), 'missed');
+  assert.equal(P.nudgeReason('Привет! Чем помочь?', srv, 'Привет'), null);
+  assert.match(P.buildNudge(srv, q), /"call": "taska_stage\/tasks_list"/);
+});
 await test('Результаты и mcp/describe', () => {
   const t = P.formatResults([{ name: 'test/add', ok: true, text: '5' }, { name: 'test/x', ok: false, text: 'x'.repeat(5000) }], { maxChars: 3000 });
   assert.match(t, /^\[MCP-РЕЗУЛЬТАТ\]/);

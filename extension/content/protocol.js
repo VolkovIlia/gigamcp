@@ -97,10 +97,13 @@
     ['товар', 'product inventory'], ['закуп', 'procurement order'], ['заказ', 'order'], ['врем', 'time'], ['дат', 'date time'],
     ['таблиц', 'sheet table spreadsheet cell'], ['ячейк', 'cell'], ['текст', 'text document'], ['страниц', 'page'], ['изображен', 'image'],
     ['картин', 'image picture'], ['скриншот', 'screenshot'], ['погод', 'weather'], ['курс', 'rate currency'],
+    ['сегодн', 'today agenda'], ['завтр', 'tomorrow agenda'], ['недел', 'week agenda'], ['план', 'plan agenda'],
   ];
 
+  const STOP = new Set(['мои', 'мой', 'моя', 'мне', 'меня', 'это', 'как', 'что', 'для', 'все', 'всё', 'ещё', 'еще', 'так', 'дай', 'ну', 'the', 'and', 'for']);
+
   function queryTerms(query) {
-    const words = String(query || '').toLowerCase().replace(/ё/g, 'е').split(/[^a-zа-я0-9]+/).filter((w) => w.length >= 3);
+    const words = String(query || '').toLowerCase().replace(/ё/g, 'е').split(/[^a-zа-я0-9]+/).filter((w) => w.length >= 3 && !STOP.has(w));
     const terms = new Set();
     for (const w of words) {
       terms.add(/[а-я]/.test(w) ? w.slice(0, Math.max(4, Math.min(6, w.length - 2))) : w.replace(/s$/, ''));
@@ -109,26 +112,41 @@
     return [...terms];
   }
 
+  // слова имени/описания: tasks_list → [task, list]; «taska» остаётся «taska» и не совпадает с «task»
+  const words = (s) => String(s || '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().replace(/ё/g, 'е').split(/[^a-zа-я0-9]+/).filter(Boolean);
+  const singular = (w) => (/[a-z]/.test(w) ? w.replace(/(ies)$/, 'y').replace(/(sses|xes|ches|shes)$/, (m) => m.slice(0, -2)).replace(/([^s])s$/, '$1') : w);
+  const termHits = (term, ws) => ws.some((w) => (/[а-я]/.test(term) ? w.startsWith(term) : singular(w) === term));
+
   /** Инструменты по убыванию соответствия запросу: [{server, tool, score}] */
   function rankTools(servers, query) {
     const terms = queryTerms(query);
     const out = [];
-    for (const s of servers) for (const t of s.tools || []) {
-      const name = t.name.toLowerCase().replace(/[_\-.]/g, ' ');
-      const desc = String(t.description || '').toLowerCase().replace(/ё/g, 'е');
+    for (const s of servers) {
+      // название системы в запросе («…на Taska») говорит, куда идти, но не какую функцию звать
+      const own = new Set([...words(s.id), ...words(s.name)]);
+      const sTerms = terms.filter((x) => !own.has(x));
+      for (const t of s.tools || []) {
+      const nameWords = words(t.name);
+      const descWords = words(t.description);
       let score = 0;
-      for (const term of terms) {
-        if (name.includes(term)) score += 3;
-        else if (desc.includes(term)) score += 1;
+      for (const term of sTerms) {
+        if (termHits(term, nameWords)) score += 3;
+        else if (termHits(term, descWords)) score += 1;
       }
-      if (/\b(list|search|get|find)\b/.test(name)) score += 0.2; // чтение — безопасный первый шаг
+      // чтение — безопасный первый шаг: list > search > get
+      if (nameWords.includes('list')) score += 0.3;
+      else if (nameWords.includes('search') || nameWords.includes('find') || nameWords.includes('agenda')) score += 0.2;
+      else if (nameWords.includes('get')) score += 0.1;
       out.push({ server: s, tool: t, score });
+      }
     }
     return out.sort((a, b) => b.score - a.score);
   }
 
   function exampleCall(ranked) {
-    const pick = ranked.find((r) => !(r.tool.inputSchema?.required || []).length) || ranked[0];
+    const best = ranked[0]?.score || 0;
+    const near = ranked.filter((r) => r.score >= best - 1);
+    const pick = near.find((r) => !(r.tool.inputSchema?.required || []).length) || ranked[0];
     if (!pick) return null;
     const args = {};
     for (const k of pick.tool.inputSchema?.required || []) {
@@ -143,7 +161,7 @@
    * query — текст запроса пользователя: подходящие инструменты идут первыми и с полными параметрами.
    * Возвращает { text, compact, signature, toolCount }.
    */
-  function buildContext(servers, { maxChars = 24000, forceCompact = false, query = '', topFull = 12 } = {}) {
+  function buildContext(servers, { maxChars = 14000, forceCompact = false, query = '', topFull = 8 } = {}) {
     const active = servers.filter((s) => s.tools && s.tools.length);
     const toolCount = active.reduce((n, s) => n + s.tools.length, 0);
     const sigSrc = active.map((s) => s.id + ':' + s.tools.map((t) => t.name).sort().join(',')).join(';');
@@ -195,22 +213,37 @@
       const topSet = new Set(top.map((r) => r.server.id + '/' + r.tool.name));
       const out = [relevant.length ? 'ПОДХОДЯЩИЕ ДЛЯ ЭТОГО ЗАПРОСА (с параметрами)' : 'ФУНКЦИИ С ПАРАМЕТРАМИ'];
       for (const r of top) out.push(toolFull(r.server.id, r.tool));
-      out.push('', 'ОСТАЛЬНЫЕ ФУНКЦИИ (только имена)');
-      for (const s of active) {
-        const rest = s.tools.filter((t) => !topSet.has(s.id + '/' + t.name));
-        if (!rest.length) continue;
-        out.push(`Сервер ${s.id}:`);
-        for (const t of rest) out.push(toolShort(s.id, t));
+      const restCount = active.reduce((n, s) => n + s.tools.filter((t) => !topSet.has(s.id + '/' + t.name)).length, 0);
+      // короткие описания — только если помещаются; иначе одни имена через запятую
+      const restLines = (short) => {
+        const lines = [];
+        for (const s of active) {
+          const rest = s.tools.filter((t) => !topSet.has(s.id + '/' + t.name));
+          if (!rest.length) continue;
+          if (short) { lines.push(`Сервер ${s.id}:`); for (const t of rest) lines.push(toolShort(s.id, t)); }
+          else lines.push(`${s.id}/: ` + rest.map((t) => t.name).join(', '));
+        }
+        return lines;
+      };
+      if (restCount) {
+        let rest = restLines(true);
+        if (rest.join('\n').length > maxChars / 2) rest = restLines(false);
+        out.push('', 'ОСТАЛЬНЫЕ ФУНКЦИИ (вызываются так же: сервер/имя)', ...rest);
+        out.push('', `• ${DESCRIBE} — вернуть параметры функций\n    tools: string[] — имена в виде сервер/функция`);
       }
-      out.push('', `• ${DESCRIBE} — вернуть параметры функций\n    tools: string[] — имена в виде сервер/функция`);
       return out;
     };
 
+    const footer = [
+      '',
+      `Если запрос ниже касается данных в ${active.map((s) => s.id).join(', ')}, твой ответ — только блок кода mcp с вызовом, без встроенных навыков и без пояснений.`,
+    ];
+
     let compact = !!forceCompact;
-    let text = [...header(compact), ...(compact ? compactBody() : fullBody()), CTX_CLOSE].join('\n');
+    let text = [...header(compact), ...(compact ? compactBody() : fullBody()), ...footer, CTX_CLOSE].join('\n');
     if (!compact && text.length > maxChars) {
       compact = true;
-      text = [...header(true), ...compactBody(), CTX_CLOSE].join('\n');
+      text = [...header(true), ...compactBody(), ...footer, CTX_CLOSE].join('\n');
     }
     return { text, compact, signature, toolCount };
   }
@@ -220,17 +253,39 @@
   const NUDGE_OPEN = '[MCP-НАПОМИНАНИЕ]';
   const REFUSAL_RE = /(нет|не имею|не получил\w*|отсутству\w*)\s+(прямого\s+|никакого\s+)?доступ\w*|не могу\s+(получить|посмотреть|показать|просмотреть|открыть|прочитать|подключ\w+|зайти)|у меня нет (возможности|информации о тво|сведений о тво)|не имею возможности|don't have access|no access to your/i;
 
+  // ГигаЧат ушёл в свои навыки: «Ошибка при вызове инструмента», «запрос относится к …системе управления задачами»
+  const DEFLECT_RE = /ошибк\w* при вызов\w* инструмент|не удалось (вызвать|выполнить) (инструмент|навык)|запрос относится к|подходящ\w+ навык\w* не найден|в системе управления задачами/i;
+
   function looksLikeRefusal(text) { return REFUSAL_RE.test(String(text || '')); }
+
+  /**
+   * Нужно ли напомнить модели про функции, если в её ответе нет вызова.
+   * 'refusal' — ответила, что нет доступа; 'deflect' — ушла во встроенные навыки;
+   * 'missed' — запрос явно про подключённую систему (имя функции совпало), а вызова нет.
+   */
+  function nudgeReason(text, servers, query) {
+    text = String(text || '');
+    if (REFUSAL_RE.test(text)) return 'refusal';
+    if (DEFLECT_RE.test(text)) return 'deflect';
+    if (query && servers?.length) {
+      const top = rankTools(servers, query)[0];
+      if (top && top.score >= 3) return 'missed';
+    }
+    return null;
+  }
 
   function buildNudge(servers, query) {
     const ranked = rankTools(servers, query);
     const good = ranked.filter((r) => r.score >= 1);
-    const top = (good.length ? good.slice(0, 5) : ranked.slice(0, 3)).map((r) => `${r.server.id}/${r.tool.name}`);
+    const picked = good.length ? good.slice(0, 5) : ranked.slice(0, 3);
+    const top = picked.map((r) => `${r.server.id}/${r.tool.name}`);
+    const example = exampleCall(picked) || '{"call": "сервер/функция", "arguments": {}}';
     return [
       NUDGE_OPEN,
       'У тебя есть доступ к данным пользователя через внешние функции GigaMCP (см. [MCP-КОНТЕКСТ] выше). Это не встроенные навыки: не ищи навыков и не задавай вопросов формой — просто напиши блок кода mcp с вызовом.',
       top.length ? `Скорее всего подойдут: ${top.join(', ')}.` : '',
-      'Ответь только блоком вызова, например:\n```mcp\n{"call": "' + (top[0] || 'сервер/функция') + '", "arguments": {}}\n```',
+      query ? `Запрос пользователя был: ${clip(query, 300)}` : '',
+      'Ответь только блоком вызова, например:\n```mcp\n' + example + '\n```',
     ].filter(Boolean).join('\n');
   }
 
@@ -340,7 +395,7 @@
   }
 
   const api = {
-    CTX_OPEN, CTX_CLOSE, RES_OPEN, RES_CLOSE, DESCRIBE, NUDGE_OPEN, rankTools, looksLikeRefusal, buildNudge,
+    CTX_OPEN, CTX_CLOSE, RES_OPEN, RES_CLOSE, DESCRIBE, NUDGE_OPEN, rankTools, looksLikeRefusal, nudgeReason, buildNudge,
     hash, typeOf, paramLines, buildContext, describeTools, resolveName,
     tryParseObject, normalizeCall, parseCallText, extractCallsFromText, formatResults, contextSignatureIn,
   };

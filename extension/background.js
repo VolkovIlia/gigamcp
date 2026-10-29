@@ -12,7 +12,7 @@ const DEFAULT_SETTINGS = {
   autoRun: false,         // выполнять вызовы без подтверждения
   autoSend: true,         // отправлять результат в чат автоматически
   maxResultChars: 15000,  // лимит текста результата на один ответ
-  contextMaxChars: 24000, // больше — переходим в компактный каталог инструментов
+  contextMaxChars: 14000, // больше — переходим в компактный каталог инструментов
   maxAutoRounds: 12,      // защита от бесконечного цикла в авто-режиме
   toolTimeoutSec: 120,
 };
@@ -42,7 +42,9 @@ function mutate(fn) {
 
 async function load() {
   const { servers = [], secrets = {}, settings = {} } = await chrome.storage.local.get(['servers', 'secrets', 'settings']);
-  return { servers, secrets, settings: { ...DEFAULT_SETTINGS, ...settings } };
+  const merged = { ...DEFAULT_SETTINGS, ...settings };
+  if (merged.contextMaxChars === 24000) merged.contextMaxChars = DEFAULT_SETTINGS.contextMaxChars; // прежнее значение по умолчанию (до 0.2.4)
+  return { servers, secrets, settings: merged };
 }
 
 async function saveServers(servers) { await chrome.storage.local.set({ servers }); }

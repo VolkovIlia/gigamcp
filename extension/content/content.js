@@ -37,7 +37,7 @@
   const AUTO_WINDOW_MS = 15 * 60e3; // авто-выполнение только для ответов на недавнюю отправку
 
   // ---------- состояние ----------
-  let state = { servers: [], settings: { enabled: true, autoRun: false, autoSend: true, maxResultChars: 15000, contextMaxChars: 24000, maxAutoRounds: 12 }, redirectUri: '' };
+  let state = { servers: [], settings: { enabled: true, autoRun: false, autoSend: true, maxResultChars: 15000, contextMaxChars: 14000, maxAutoRounds: 12 }, redirectUri: '' };
   let lastSendAt = 0;
   let autoRounds = 0;
   let bypass = false;
@@ -339,22 +339,31 @@
       const t = msgs[i].el.innerText || '';
       if (t.includes(P.RES_OPEN) || t.includes(P.NUDGE_OPEN)) return null; // предыдущий шаг уже служебный
       const j = t.lastIndexOf('Запрос пользователя:');
-      return j >= 0 ? t.slice(j + 20).trim() : t.trim();
+      return { query: j >= 0 ? t.slice(j + 20).trim() : t.trim(), withContext: t.includes(P.CTX_OPEN) };
     }
     return null;
   }
+
+  const NUDGE_TEXT = {
+    refusal: 'ГигаЧат ответил, что у него нет доступа, хотя инструменты подключены.',
+    deflect: 'ГигаЧат попробовал свои встроенные навыки вместо функций GigaMCP.',
+    missed: 'Похоже, запрос про подключённую систему, но ГигаЧат не вызвал функцию.',
+  };
 
   function checkRefusal(msgs, lastIdx) {
     if (lastIdx < 0 || !mcpOn() || isGenerating()) return;
     const m = msgs[lastIdx];
     if (msgs.slice(lastIdx + 1).some((x) => x.role === 'user')) return;
     const text = m.el.innerText || '';
-    if (!P.looksLikeRefusal(text) || extractCalls(m.el).length) return;
+    if (!text.trim() || isServiceText(text) || extractCalls(m.el).length) return;
     if (!chatHasContext(null)) return;
+    const q = lastHumanQuery(msgs, lastIdx);
+    if (!q) return;
+    const reason = P.nudgeReason(text, activeServers(), q.query);
+    if (!reason) return;
     const prev = textSeen.get(m.el);
     if (!prev || prev.text !== text || Date.now() - prev.at < STABLE_MS) { isStable(m.el); scheduleScan(STABLE_MS); return; }
-    const query = lastHumanQuery(msgs, lastIdx);
-    if (query == null) return;
+    const query = q.query;
     const key = `${location.pathname}#${P.hash(text.slice(0, 400))}`;
     if (nudged.has(key)) return;
     const send = () => {
@@ -364,7 +373,8 @@
       sendToChat(P.buildNudge(activeServers(), query)).catch((e) => flash(e.message, 'error'));
     };
     const recent = lastSendAt && Date.now() - lastSendAt < AUTO_WINDOW_MS;
-    if (state.settings.autoRun && recent && autoRounds < state.settings.maxAutoRounds) { autoRounds++; send(); return; }
+    const autoOk = reason !== 'missed' || q.withContext; // «не вызвал» — сами напоминаем только сразу после контекста
+    if (state.settings.autoRun && recent && autoOk && autoRounds < state.settings.maxAutoRounds) { autoRounds++; send(); return; }
     if (nudgeHost && m.el.contains(nudgeHost)) return;
     nudgeHost?.remove();
     nudgeHost = document.createElement('div');
@@ -375,7 +385,7 @@
     sr.innerHTML = `<style>${BASE_CSS}
       .box { display:flex; gap:10px; align-items:center; flex-wrap:wrap; border:1px solid var(--line); border-radius:14px; background:var(--bg2); padding:9px 12px; max-width:760px; }
       .box span { flex:1; min-width:200px; font-size:12.5px; color:var(--fg2); }
-    </style><div class="t"><div class="box"><span>ГигаЧат ответил, что у него нет доступа, хотя инструменты подключены.</span><button class="btn primary" data-act="nudge">Напомнить про инструменты</button></div></div>`;
+    </style><div class="t"><div class="box"><span>${NUDGE_TEXT[reason]}</span><button class="btn primary" data-act="nudge">Напомнить про инструменты</button></div></div>`;
     sr.querySelector('.t').classList.toggle('light', isLightPage());
     sr.querySelector('[data-act=nudge]').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); lastSendAt = Date.now(); send(); });
     (m.el.querySelector(SEL.assistantContent) || m.el).appendChild(nudgeHost);
