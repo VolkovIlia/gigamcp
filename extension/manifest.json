@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "GigaMCP — MCP для ГигаЧата",
   "short_name": "GigaMCP",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Подключает MCP-серверы к giga.chat: кнопка у поля ввода, вызовы инструментов прямо из чата. Неофициальное расширение с открытым кодом.",
   "homepage_url": "https://github.com/VolkovIlia/gigamcp",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApyv9zPRuEkwb3+0yTyrTZfHrsu17frtmK6O1xe3XCp1ZMRk073t6ox0Uj1qOtnnvIM9mqgrfwsQ2VVGYIa2yfWdVUzkSGkSgoc5htMg2HDUlUiPZMkmtKjWmSeq/4IYsz+xdB2/Gh+k+7Z1uDzqDGGG0OmpLPaouQ8FxxQtYrCKO9P9xOsyhQ78mtYxDxp5Qdy/V1jDlbO27JXbQJgwJaJNgs5d16LvxQpS00+bLjo+qkpKyok6Bba3CNfxWKsovOllQlW4cBsvekC9z3ZhTc2bxSrtW87/LmKF7dFYCmxwCsetVIb//xwazPS0v01+h76boKLOMcOzEGrZqJdylfwIDAQAB",

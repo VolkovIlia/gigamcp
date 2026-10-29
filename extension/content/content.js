@@ -179,7 +179,7 @@
     return all;
   }
 
-  const isServiceText = (t) => t.includes(P.CTX_OPEN) || t.includes(P.RES_OPEN);
+  const isServiceText = (t) => t.includes(P.CTX_OPEN) || t.includes(P.RES_OPEN) || t.includes(P.NUDGE_OPEN);
 
   function chatHasContext(signature) {
     for (const m of getMessages()) {
@@ -202,8 +202,9 @@
   function injectInto(text) {
     const ctx = needsContext();
     if (!ctx) return null;
-    if (text.includes(P.CTX_OPEN) || text.includes(P.RES_OPEN)) return null;
-    return `${ctx.text}\n\nЗапрос пользователя:\n${text}`;
+    if (isServiceText(text)) return null;
+    const full = P.buildContext(activeServers(), { maxChars: state.settings.contextMaxChars, query: text });
+    return `${full.text}\n\nЗапрос пользователя:\n${text}`;
   }
 
   function onUserSend() { lastSendAt = Date.now(); autoRounds = 0; }
@@ -322,7 +323,62 @@
         attachCard(entry);
       }
     });
+    checkRefusal(msgs, lastAssistantIdx);
     if (pendingRecheck) scheduleScan(STABLE_MS / 2);
+  }
+
+  // ---------- модель отказалась пользоваться инструментами ----------
+
+  const nudgeKey = 'gmcp:nudged';
+  const nudged = new Set(JSON.parse(sessionStorage.getItem(nudgeKey) || '[]'));
+  let nudgeHost = null;
+
+  function lastHumanQuery(msgs, before) {
+    for (let i = before - 1; i >= 0; i--) {
+      if (msgs[i].role !== 'user') continue;
+      const t = msgs[i].el.innerText || '';
+      if (t.includes(P.RES_OPEN) || t.includes(P.NUDGE_OPEN)) return null; // предыдущий шаг уже служебный
+      const j = t.lastIndexOf('Запрос пользователя:');
+      return j >= 0 ? t.slice(j + 20).trim() : t.trim();
+    }
+    return null;
+  }
+
+  function checkRefusal(msgs, lastIdx) {
+    if (lastIdx < 0 || !mcpOn() || isGenerating()) return;
+    const m = msgs[lastIdx];
+    if (msgs.slice(lastIdx + 1).some((x) => x.role === 'user')) return;
+    const text = m.el.innerText || '';
+    if (!P.looksLikeRefusal(text) || extractCalls(m.el).length) return;
+    if (!chatHasContext(null)) return;
+    const prev = textSeen.get(m.el);
+    if (!prev || prev.text !== text || Date.now() - prev.at < STABLE_MS) { isStable(m.el); scheduleScan(STABLE_MS); return; }
+    const query = lastHumanQuery(msgs, lastIdx);
+    if (query == null) return;
+    const key = `${location.pathname}#${P.hash(text.slice(0, 400))}`;
+    if (nudged.has(key)) return;
+    const send = () => {
+      nudged.add(key);
+      try { sessionStorage.setItem(nudgeKey, JSON.stringify([...nudged].slice(-100))); } catch {}
+      nudgeHost?.remove(); nudgeHost = null;
+      sendToChat(P.buildNudge(activeServers(), query)).catch((e) => flash(e.message, 'error'));
+    };
+    const recent = lastSendAt && Date.now() - lastSendAt < AUTO_WINDOW_MS;
+    if (state.settings.autoRun && recent && autoRounds < state.settings.maxAutoRounds) { autoRounds++; send(); return; }
+    if (nudgeHost && m.el.contains(nudgeHost)) return;
+    nudgeHost?.remove();
+    nudgeHost = document.createElement('div');
+    nudgeHost.setAttribute('data-gmcp', 'nudge');
+    nudgeHost.style.cssText = 'display:block;margin:8px 0;';
+    styleHost(nudgeHost);
+    const sr = nudgeHost.attachShadow({ mode: 'open' });
+    sr.innerHTML = `<style>${BASE_CSS}
+      .box { display:flex; gap:10px; align-items:center; flex-wrap:wrap; border:1px solid var(--line); border-radius:14px; background:var(--bg2); padding:9px 12px; max-width:760px; }
+      .box span { flex:1; min-width:200px; font-size:12.5px; color:var(--fg2); }
+    </style><div class="t"><div class="box"><span>ГигаЧат ответил, что у него нет доступа, хотя инструменты подключены.</span><button class="btn primary" data-act="nudge">Напомнить про инструменты</button></div></div>`;
+    sr.querySelector('.t').classList.toggle('light', isLightPage());
+    sr.querySelector('[data-act=nudge]').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); lastSendAt = Date.now(); send(); });
+    (m.el.querySelector(SEL.assistantContent) || m.el).appendChild(nudgeHost);
   }
 
   // ---------- выполнение ----------
@@ -940,8 +996,8 @@
       if (m.role !== 'user') continue;
       if (m.el.querySelector(':scope > .gmcp-tag') || m.el.dataset.gmcpTagged) continue;
       const t = m.el.innerText || '';
-      const isCtx = t.includes(P.CTX_OPEN), isRes = t.includes(P.RES_OPEN);
-      if (!isCtx && !isRes) continue;
+      const isCtx = t.includes(P.CTX_OPEN), isRes = t.includes(P.RES_OPEN), isNudge = t.includes(P.NUDGE_OPEN);
+      if (!isCtx && !isRes && !isNudge) continue;
       // сворачиваем самый глубокий элемент, который содержит весь текст сообщения
       let target = m.el.querySelector(SEL.userBubble) || m.el;
       while (target.children.length === 1 && (target.firstElementChild.innerText || '').length >= t.length * 0.9) target = target.firstElementChild;
@@ -949,7 +1005,7 @@
       tag.type = 'button';
       tag.className = 'gmcp-tag';
       tag.setAttribute('data-gmcp', 'tag');
-      const label = isCtx ? 'MCP: служебный контекст инструментов' : 'MCP: результат инструментов';
+      const label = isCtx ? 'MCP: служебный контекст инструментов' : isRes ? 'MCP: результат инструментов' : 'MCP: напоминание про инструменты';
       tag.textContent = `${label} · показать`;
       tag.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();

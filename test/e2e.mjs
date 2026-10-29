@@ -104,6 +104,14 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('.Message-styled__Bot').length === 4);
   ok('авто-режим: вызов выполнен и результат отправлен без клика, контекст не продублирован');
 
+  // модель отказалась («нет доступа») → расширение само напоминает про инструменты (авто-режим включён)
+  await page.locator('#chat-input-textarea').fill('Покажи мои задачи');
+  await page.keyboard.press('Enter');
+  await page.getByText('Готово: задача 1').waitFor({ timeout: 25000 });
+  const sentN = await page.evaluate(() => window.__sent);
+  assert.ok(sentN.some((x) => x.startsWith('[MCP-НАПОМИНАНИЕ]')), 'напоминание отправлено');
+  ok('отказ «нет доступа» → напоминание → модель вызвала инструмент');
+
   // перезагрузка: история не выполняется повторно
   await page.reload();
   await page.locator('[data-gmcp=chip] .chip').waitFor();

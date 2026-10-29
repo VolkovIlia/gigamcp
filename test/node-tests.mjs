@@ -158,8 +158,9 @@ await test('Контекст: полный и сжатый', () => {
   assert.equal(small.compact, true);
   assert.match(small.text, /mcp\/describe/);
   assert.equal(P.contextSignatureIn(full.text), full.signature);
-  // шаблон из инструкции не должен распознаваться как вызов
-  assert.deepEqual(P.extractCallsFromText(full.text), []);
+  // в инструкции — пример настоящего вызова (инструмент без обязательных параметров)
+  assert.deepEqual(P.extractCallsFromText(full.text).map((c) => c.name), ['test/ping']);
+  assert.match(full.text, /ГЛАВНОЕ: не отвечай, что у тебя нет доступа/);
 });
 await test('Разбор вызовов в разных видах', () => {
   assert.deepEqual(P.parseCallText('{"call": "test/add", "arguments": {"a": 1, "b": 2}}'), { name: 'test/add', arguments: { a: 1, b: 2 } });
@@ -171,6 +172,20 @@ await test('Разбор вызовов в разных видах', () => {
   assert.equal(P.resolveName(fakeServers, 'add').tool.name, 'add');
   assert.equal(P.resolveName(fakeServers, 'test.add').tool.name, 'add');
   assert.equal(P.resolveName(fakeServers, 'x/zzz'), null);
+});
+await test('Подбор инструментов под запрос и напоминание при отказе', () => {
+  const srv = [{ id: 'taska', tools: [
+    { name: 'risks_create', description: 'Create a risk', inputSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] } },
+    { name: 'tasks_list', description: 'List tasks', inputSchema: { type: 'object', properties: { status: { type: 'string' } } } },
+    { name: 'calendar_agenda', description: 'Agenda', inputSchema: { type: 'object' } },
+  ] }];
+  assert.equal(P.rankTools(srv, 'Покажи мои задачи на сегодня')[0].tool.name, 'tasks_list');
+  const c = P.buildContext(srv, { query: 'Покажи мои задачи', forceCompact: true });
+  assert.match(c.text, /ПОДХОДЯЩИЕ ДЛЯ ЭТОГО ЗАПРОСА[\s\S]*taska\/tasks_list[\s\S]*ОСТАЛЬНЫЕ ИНСТРУМЕНТЫ[\s\S]*taska\/risks_create/);
+  assert.equal(c.signature, P.buildContext(srv, { query: 'другое' }).signature, 'подпись не зависит от запроса');
+  assert.ok(P.looksLikeRefusal('Я не могу показать задачи из Taska, так как у меня нет доступа к твоим данным в этом приложении.'));
+  assert.ok(!P.looksLikeRefusal('Вот ваши задачи на сегодня: 1. Купить молоко'));
+  assert.match(P.buildNudge(srv, 'задачи'), /^\[MCP-НАПОМИНАНИЕ\][\s\S]*taska\/tasks_list/);
 });
 await test('Результаты и mcp/describe', () => {
   const t = P.formatResults([{ name: 'test/add', ok: true, text: '5' }, { name: 'test/x', ok: false, text: 'x'.repeat(5000) }], { maxChars: 3000 });

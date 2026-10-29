@@ -38,6 +38,12 @@
       const m = user.match(/успешно\n([^\n]+)/);
       return `Готово: ${m ? m[1] : '?'}`;
     }
+    if (user.startsWith('[MCP-НАПОМИНАНИЕ]')) {
+      return '```mcp\n{"call": "test/echo", "arguments": {"text": "задача 1"}}\n```';
+    }
+    if (/мои задачи/i.test(user)) {
+      return 'Я не могу показать задачи, так как у меня нет доступа к твоим данным.';
+    }
     if (/демо/i.test(user)) {
       return 'Спрошу локальную программу.\n```mcp\n{"call": "demo/add", "arguments": {"a": 7, "b": 8}}\n```';
     }
