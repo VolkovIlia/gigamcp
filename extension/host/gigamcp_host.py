@@ -138,11 +138,15 @@ def main():
                 send({'type': 'error', 'message': 'Не удалось запустить «%s»: %s. Укажите полный путь к программе.' % (command, e.strerror or e)})
                 proc = None
                 continue
-            threading.Thread(target=pump_stdout, args=(proc,), daemon=True).start()
-            threading.Thread(target=pump_stderr, args=(proc,), daemon=True).start()
+            pumps = [threading.Thread(target=f, args=(proc,), daemon=True) for f in (pump_stdout, pump_stderr)]
+            for t in pumps:
+                t.start()
 
             def wait_exit(p):
                 code = p.wait()
+                # дочитать вывод: иначе последние ответы и текст ошибки теряются (до 2 с — вдруг трубы держит потомок)
+                for t in pumps:
+                    t.join(2)
                 send({'type': 'exit', 'code': code, 'stderr': '\n'.join(_stderr_tail[-5:])})
                 os._exit(0)
             threading.Thread(target=wait_exit, args=(proc,), daemon=True).start()
