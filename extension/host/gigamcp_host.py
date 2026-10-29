@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 
-VERSION = '0.2.0'
+VERSION = '0.2.7'  # меняется вместе с протоколом помощника; панель сравнивает её с HOST_MIN в content.js
 MAX_FRAME = 900 * 1024      # Chrome принимает от помощника не больше 1 МБ за сообщение
 CHUNK_CHARS = 150 * 1000    # с запасом на экранирование и UTF-8
 
@@ -67,6 +67,25 @@ def find_command(cmd):
     return shutil.which(cmd, path=path) or cmd
 
 
+def user_dirs():
+    """Домашняя папка и «Документы» пользователя — чтобы модель знала, куда сохранять файлы.
+    Документы на Linux берутся из ~/.config/user-dirs.dirs (там может быть «Документы»), иначе ~/Documents."""
+    home = os.path.expanduser('~')
+    docs = None
+    if sys.platform.startswith('linux'):
+        cfg = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.join(home, '.config'), 'user-dirs.dirs')
+        try:
+            with open(cfg, encoding='utf-8') as f:
+                for line in f:
+                    if line.startswith('XDG_DOCUMENTS_DIR='):
+                        docs = line.split('=', 1)[1].strip().strip('"').replace('$HOME', home)
+        except OSError:
+            pass
+    if not docs or not os.path.isdir(docs):
+        docs = os.path.join(home, 'Documents')
+    return {'home': home, 'documents': docs if os.path.isdir(docs) else home}
+
+
 def pump_stdout(proc):
     for line in iter(proc.stdout.readline, b''):
         line = line.strip()
@@ -108,7 +127,9 @@ def main():
             args = [str(a) for a in (msg.get('args') or [])]
             env = dict(os.environ)
             env.update({str(k): str(v) for k, v in (msg.get('env') or {}).items()})
-            cwd = os.path.expanduser(msg.get('cwd') or '') or None
+            # без рабочей папки — домашняя: браузер запускает помощник из своей папки (у Flatpak — скрытой
+            # ~/.var/app/…), и файлы с относительным именем терялись бы там
+            cwd = os.path.expanduser(msg.get('cwd') or '~')
             exe = find_command(command)
             try:
                 proc = subprocess.Popen([exe] + args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -125,7 +146,7 @@ def main():
                 send({'type': 'exit', 'code': code, 'stderr': '\n'.join(_stderr_tail[-5:])})
                 os._exit(0)
             threading.Thread(target=wait_exit, args=(proc,), daemon=True).start()
-            send({'type': 'spawned', 'pid': proc.pid, 'path': exe})
+            send(dict(user_dirs(), type='spawned', pid=proc.pid, path=exe, cwd=cwd))
         elif kind == 'msg':
             if proc is None:
                 send({'type': 'error', 'message': 'Программа не запущена'})

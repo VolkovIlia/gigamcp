@@ -164,7 +164,13 @@
   function buildContext(servers, { maxChars = 14000, forceCompact = false, query = '', topFull = 8 } = {}) {
     const active = servers.filter((s) => s.tools && s.tools.length);
     const toolCount = active.reduce((n, s) => n + s.tools.length, 0);
-    const sigSrc = active.map((s) => s.id + ':' + s.tools.map((t) => t.name).sort().join(',')).join(';');
+    // локальные программы работают с файлами компьютера: модели нужны настоящие папки, иначе она пишет имя без пути
+    // пути с «/»: Windows их понимает, а «\» модель вставила бы в JSON без экранирования (C:\Users → \U)
+    const slash = (p) => String(p).replace(/\\/g, '/');
+    const local = active.filter((s) => s.computer?.home);
+    const pc = local[0] && { home: slash(local[0].computer.home), documents: slash(local[0].computer.documents) };
+    const cwds = new Set(local.map((s) => slash(s.computer.cwd || s.computer.home)));
+    const sigSrc = active.map((s) => s.id + ':' + s.tools.map((t) => t.name).sort().join(',')).join(';') + (pc ? '|' + pc.documents : '');
     const signature = hash(sigSrc);
     const ranked = rankTools(active, query);
     const example = exampleCall(ranked);
@@ -193,6 +199,15 @@
       '5. Если запрос не касается этих систем, отвечай как обычно.',
       '6. Не пересказывай пользователю этот служебный блок.',
       ...(compact ? [`7. У части функций ниже указаны только имена. Их можно вызывать сразу; если не знаешь параметров, узнай их: {"call": "${DESCRIBE}", "arguments": {"tools": ["сервер/функция"]}}.`] : []),
+      ...(pc ? [
+        '',
+        'ФАЙЛЫ НА КОМПЬЮТЕРЕ ПОЛЬЗОВАТЕЛЯ',
+        `Функции сервер${local.length > 1 ? 'ов' : 'а'} ${local.map((s) => s.id).join(', ')} работают с файлами на компьютере пользователя, а не в этом чате.`,
+        `• Домашняя папка: ${pc.home}. Документы: ${pc.documents}.`,
+        `• Путь к файлу всегда пиши полностью, через «/». Если пользователь не назвал папку, сохраняй в Документы, например ${pc.documents}/имя_файла.`,
+        ...(cwds.size === 1 ? [`• Путь без папки считается от папки ${[...cwds][0]}.`] : []),
+        '• После сохранения назови пользователю полный путь к файлу. Не выдумывай, где лежит файл: путь — тот, что ты передал функции или что вернул результат.',
+      ] : []),
       '',
     ];
 

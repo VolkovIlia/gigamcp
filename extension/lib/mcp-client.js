@@ -75,6 +75,7 @@ export class McpClient {
     this.serverInfo = null;
     this.capabilities = null;
     this.instructions = null;
+    this.computer = null; // {home, documents, cwd} — от помощника, для локальных программ
     this._id = 1;
     this._sse = null; // состояние legacy SSE
     this.stdio = stdio; // {command, args, env, cwd} — локальная программа через помощник
@@ -322,7 +323,10 @@ export class McpClient {
     const { command, args = [], env = {}, cwd = '' } = this.stdio;
     port.postMessage({ type: 'spawn', command, args, env, cwd });
     const t = setTimeout(() => fail(new McpError('Помощник не ответил за 20 с')), 20000);
-    try { await spawned; } finally { clearTimeout(t); }
+    let sp;
+    try { sp = await spawned; } finally { clearTimeout(t); }
+    // папки компьютера пользователя — модели нужно знать, куда сохранять файлы
+    this.computer = sp.home ? { home: sp.home, documents: sp.documents || sp.home, cwd: sp.cwd || sp.home } : null;
     this.transport = 'native';
     const init = await this._nativeRequest({ jsonrpc: '2.0', id: this._id++, method: 'initialize', params: this._initParams() }, 60000);
     this._applyInit(init);

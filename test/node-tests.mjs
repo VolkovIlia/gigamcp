@@ -87,8 +87,8 @@ await test('Обновление токена по refresh_token', async () => {
 
 console.log('Помощник для локальных программ (Native Messaging)');
 // Порт в стиле chrome.runtime.Port поверх процесса помощника: 4 байта длины + JSON
-function hostPort() {
-  const proc = spawn('python3', [join(here, '../extension/host/gigamcp_host.py')], { stdio: ['pipe', 'pipe', 'inherit'] });
+function hostPort({ env, cwd } = {}) {
+  const proc = spawn('python3', [join(here, '../extension/host/gigamcp_host.py')], { stdio: ['pipe', 'pipe', 'inherit'], env, cwd });
   const msgL = [], discL = [];
   let buf = Buffer.alloc(0);
   proc.stdout.on('data', (d) => {
@@ -127,6 +127,23 @@ await test('понятная ошибка, если программы нет', 
   const c = new McpClient({ transport: 'native', stdio: { command: 'no-such-mcp-program' }, nativeConnect: hostPort });
   const e = await c.listTools().catch((x) => x);
   assert.match(e.message, /Не удалось запустить «no-such-mcp-program»/);
+});
+await test('программа запускается в домашней папке, помощник сообщает «Документы» из user-dirs.dirs', async () => {
+  // Flatpak-браузер запускает помощник из скрытой ~/.var/app/<браузер>/data/gigamcp: файл с относительным именем терялся там
+  const home = mkdtempSync(join(tmpdir(), 'gmcp-home-'));
+  mkdirSync(join(home, '.config'));
+  mkdirSync(join(home, 'Документы'));
+  writeFileSync(join(home, '.config/user-dirs.dirs'), 'XDG_DESKTOP_DIR="$HOME/Рабочий стол"\nXDG_DOCUMENTS_DIR="$HOME/Документы"\n');
+  const env = { ...process.env, HOME: home };
+  delete env.XDG_CONFIG_HOME;
+  const p = hostPort({ env, cwd: mkdtempSync(join(tmpdir(), 'gmcp-browser-')) });
+  const got = {};
+  await new Promise((resolve) => {
+    p.onMessage.addListener((m) => { got[m.type] = m; if (m.type === 'exit') resolve(); });
+    p.postMessage({ type: 'spawn', command: 'sh', args: ['-c', 'pwd >&2'] });
+  });
+  assert.equal(got.exit.stderr.trim(), home);
+  assert.deepEqual([got.spawned.home, got.spawned.documents, got.spawned.cwd], [home, join(home, 'Документы'), home]);
 });
 // Запускает install-host.py; в выводе и stdout, и stderr, чтобы при падении был виден traceback
 const runInstaller = (args, env) => new Promise((resolve) => {
@@ -193,7 +210,7 @@ await test('Flatpak-браузер: манифест в его песочниц�
   assert.equal(existsSync(mpath), false);
   assert.equal(existsSync(m.path), false);
 });
-await test('установщик из релиза ставит помощник без папки расширения (curl … | python3 -)', async () => {
+await test('установщик со встроенным помощником работает без папки расширения (python3 - < файл)', async () => {
   const pk = spawnSync('bash', [join(here, '../scripts/pack.sh')], { encoding: 'utf8' });
   assert.equal(pk.status, 0, pk.stderr);
   const home = mkdtempSync(join(tmpdir(), 'gmcp-home-'));
@@ -297,6 +314,19 @@ await test('Результаты и mcp/describe', () => {
   assert.match(t, /▶ test\/add — успешно\n5/);
   assert.match(t, /обрезано/);
   assert.match(P.describeTools(fakeServers, ['test/add', 'no/pe']), /a: number — первое[\s\S]*no\/pe — не найден/);
+});
+await test('Локальная программа: модель знает папки компьютера', () => {
+  const pc = { home: '/home/u', documents: '/home/u/Документы', cwd: '/home/u' };
+  const remote = P.buildContext(fakeServers);
+  const local = P.buildContext([{ ...fakeServers[0], computer: pc }]);
+  assert.match(local.text, /\/home\/u\/Документы\/имя_файла/);
+  // пути Windows — через «/»: «\» модель вставила бы в JSON вызова без экранирования
+  const win = P.buildContext([{ ...fakeServers[0], computer: { home: 'C:\\Users\\u', documents: 'C:\\Users\\u\\Documents', cwd: 'C:\\Users\\u' } }]);
+  assert.match(win.text, /C:\/Users\/u\/Documents\/имя_файла/);
+  assert.doesNotMatch(win.text, /C:\\/);
+  assert.match(local.text, /от папки \/home\/u\./);
+  assert.doesNotMatch(remote.text, /\/home\/u/);
+  assert.notEqual(local.signature, remote.signature, 'в открытом чате контекст с папками отправится заново');
 });
 
 for (const s of servers) s.close();

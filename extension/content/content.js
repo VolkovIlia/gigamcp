@@ -44,7 +44,7 @@
   let dead = false; // контекст расширения потерян (расширение перезагружено)
   const entries = new Map(); // key -> entry (вызовы в одном ответе)
   const textSeen = new WeakMap(); // el -> {text, at}
-  const ui = { open: false, expanded: new Set(), addOpen: false, localOpen: false, importOpen: false, busy: new Set(), form: { name: '', url: '', authType: 'auto', token: '', clientId: '', clientSecret: '' }, local: { name: '', command: '', args: '', env: '', cwd: '' }, importText: '', host: null, msg: null };
+  const ui = { open: false, expanded: new Set(), addOpen: false, localOpen: false, importOpen: false, busy: new Set(), form: { name: '', url: '', authType: 'auto', token: '', clientId: '', clientSecret: '' }, local: { name: '', command: '', args: '', env: '', cwd: '' }, importText: '', host: null, installCmd: '', msg: null };
 
   const doneKey = 'gmcp:done';
   const doneSet = new Set(JSON.parse(sessionStorage.getItem(doneKey) || '[]'));
@@ -88,7 +88,7 @@
   function activeServers() {
     return state.servers
       .filter((s) => s.enabled && s.status === 'ok' && s.tools?.length)
-      .map((s) => ({ id: s.id, name: s.name, instructions: s.instructions, tools: s.tools.filter((t) => !(s.disabledTools || []).includes(t.name)) }))
+      .map((s) => ({ id: s.id, name: s.name, instructions: s.instructions, computer: s.computer, tools: s.tools.filter((t) => !(s.disabledTools || []).includes(t.name)) }))
       .filter((s) => s.tools.length);
   }
   const currentContext = () => P.buildContext(activeServers(), { maxChars: state.settings.contextMaxChars });
@@ -736,11 +736,14 @@
         <button class="toggle-sec" data-act="toggle-local" aria-expanded="${ui.localOpen}">${ui.localOpen ? '−' : '+'} Локальная программа (stdio)</button>
         ${ui.localOpen ? `<div class="add">
           <div class="hint">${ui.host == null ? 'Локальные программы запускает помощник на Python 3. Он ставится один раз, без прав администратора.'
+            : hostOutdated() ? `Помощник устарел (v${esc(ui.host.version)}): со старым ГигаЧат не узнает папки компьютера. Обновите его — интернет не нужен:`
             : ui.host.ok ? `Помощник установлен (v${esc(ui.host.version)}, Python ${esc(ui.host.python)}).`
-            : `Помощник не найден. Выполните один раз в терминале${isWindows() ? ' (cmd)' : ''}:`}
-            ${ui.host?.ok === false ? '' : '<button class="btn small" data-act="host-check" style="margin-left:6px">Проверить помощник</button>'}</div>
-          ${ui.host?.ok === false ? `<div style="display:flex;gap:6px;align-items:flex-start"><code style="flex:1;word-break:break-all">${esc(hostInstallCommand())}</code>
-            <button class="btn small" data-act="copy-host-cmd">Скопировать</button></div>
+            : 'Помощник не найден. Установите его один раз — интернет не нужен:'}
+            ${hostNeedsInstall() ? '' : '<button class="btn small" data-act="host-check" style="margin-left:6px">Проверить помощник</button>'}</div>
+          ${hostNeedsInstall() ? `<div class="hint">1. <button class="btn small" data-act="download-host" ${ui.busy.has('host-dl') ? 'disabled' : ''}>${ui.busy.has('host-dl') ? 'Скачиваю…' : 'Скачать установщик'}</button></div>
+          ${ui.installCmd ? `<div class="hint">2. Выполните в терминале:</div>
+          <div style="display:flex;gap:6px;align-items:flex-start"><code style="flex:1;word-break:break-all">${esc(ui.installCmd)}</code>
+            <button class="btn small" data-act="copy-host-cmd">Скопировать</button></div>` : ''}
           <div class="hint">Браузер из Flatpak после установки перезапустите.
             <button class="btn small" data-act="host-check" style="margin-left:6px">Проверить помощник</button></div>` : ''}
           <input type="text" data-field="l_name" placeholder="Название, например WordCraft" value="${esc(ui.local.name)}" aria-label="Название">
@@ -803,14 +806,18 @@
     renderPanel();
   }
 
+  // Минимальная версия помощника: VERSION в host/gigamcp_host.py. Старый помощник работает, но не сообщает папки компьютера.
+  const HOST_MIN = '0.2.7';
+  const olderThan = (a, b) => {
+    const x = String(a || '0').split('.').map(Number), y = b.split('.').map(Number);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);
+    return false;
+  };
+  const hostOutdated = () => !!ui.host?.ok && olderThan(ui.host.version, HOST_MIN);
+  const hostNeedsInstall = () => ui.host?.ok === false || hostOutdated();
   const isWindows = () => /Windows/.test(navigator.userAgent);
-  // Установщик из релиза той же версии, что и расширение: со встроенным помощником, без папки расширения.
-  // У копии из магазина свой ID — передаём его, чтобы помощник пускал именно её.
-  function hostInstallCommand() {
-    const url = `https://github.com/VolkovIlia/gigamcp/releases/download/v${chrome.runtime.getManifest().version}/install-host.py`;
-    const id = chrome.runtime.id === 'mmjnppnijhblimofghdejjdhfgdjgcol' ? '' : ` --extension-id ${chrome.runtime.id}`;
-    return `curl -fsSL ${url} | ${isWindows() ? 'python' : 'python3'} -${id}`;
-  }
+  // Команда для скачанного установщика: путь в кавычках (в нём бывают пробелы и кириллица)
+  const installCommand = (path) => `${isWindows() ? 'python' : 'python3'} "${String(path).replace(/"/g, '\\"')}"`;
 
   function authError(err) {
     // фон мог перезапуститься, пока пользователь входил: вход тогда завершится сам, а панель обновится
@@ -838,10 +845,14 @@
         case 'toggle-send': await bg('saveSettings', { patch: { autoSend: !st.autoSend } }); break;
         case 'toggle-add': ui.addOpen = !ui.addOpen; renderPanel(); break;
         case 'toggle-local': ui.localOpen = !ui.localOpen; if (ui.localOpen && !ui.host) checkHost(); renderPanel(); break;
+        case 'download-host': await withBusy('host-dl', async () => {
+          const r = await bg('downloadHostInstaller');
+          ui.installCmd = installCommand(r.path);
+        }); break;
         case 'toggle-import': ui.importOpen = !ui.importOpen; renderPanel(); break;
         case 'host-check': await checkHost(); break;
         case 'copy-host-cmd':
-          await navigator.clipboard.writeText(hostInstallCommand());
+          await navigator.clipboard.writeText(ui.installCmd);
           flash('Команда скопирована — вставьте её в терминал', 'ok');
           break;
         case 'expand': ui.expanded.has(id) ? ui.expanded.delete(id) : ui.expanded.add(id); renderPanel(); break;

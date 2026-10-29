@@ -12,8 +12,8 @@
 Браузеры из Flatpak получают обёртку, которая запускает помощник вне песочницы (flatpak-spawn --host),
 и разрешение на это: flatpak override --user --talk-name=org.freedesktop.Flatpak.
 
-Файл из релиза содержит помощник внутри (HOST_SOURCE), поэтому его можно запустить без папки расширения:
-    curl -fsSL https://github.com/VolkovIlia/gigamcp/releases/download/vX.Y.Z/install-host.py | python3 -
+Файл, который скачивает панель расширения («Скачать установщик»), и файл со страницы релиза содержат помощник
+внутри (HOST_SOURCE), поэтому их можно запустить без папки расширения и без интернета.
 """
 import json
 import os

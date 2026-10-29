@@ -166,7 +166,7 @@ async function refreshServer(id) {
     const { tools, client } = await withServer(id, async (c) => ({ tools: await c.listTools(), client: c }));
     return await patchServer(id, {
       status: 'ok', lastError: null, tools: tools.map((t) => ({ name: t.name, description: t.description || '', inputSchema: t.inputSchema || {}, annotations: t.annotations || undefined })),
-      toolsAt: Date.now(), serverInfo: client.serverInfo, instructions: client.instructions ? String(client.instructions).slice(0, 4000) : null, transportUsed: client.transport,
+      toolsAt: Date.now(), serverInfo: client.serverInfo, instructions: client.instructions ? String(client.instructions).slice(0, 4000) : null, transportUsed: client.transport, computer: client.computer || null,
     });
   } catch (e) {
     if (!e.authRequired) await patchServer(id, { status: 'error', lastError: e.message });
@@ -296,6 +296,40 @@ const handlers = {
       port.onMessage.addListener((m) => { if (m?.type === 'hello') { clearTimeout(t); done({ ok: true, version: m.version, python: m.python }); } });
       port.onDisconnect.addListener(() => { clearTimeout(t); done({ ok: false, error: chrome.runtime.lastError?.message || 'Помощник закрыл соединение' }); });
       port.postMessage({ type: 'hello' });
+    });
+  },
+
+  /**
+   * Установщик помощника из файлов самого расширения — без сети: на рабочих машинах нет curl и закрыт GitHub.
+   * Внутри — помощник (HOST_SOURCE) и ID этой копии расширения. Возвращает полный путь к скачанному файлу.
+   */
+  async downloadHostInstaller() {
+    const read = (p) => fetch(chrome.runtime.getURL(p)).then((r) => r.text());
+    const [inst, host] = await Promise.all([read('host/install-host.py'), read('host/gigamcp_host.py')]);
+    const put = (text, marker, value) => {
+      if (text.split(marker).length !== 2) throw new McpError(`install-host.py: не найдено «${marker}»`);
+      return text.replace(marker, value);
+    };
+    // строка и список в JSON — допустимые литералы Python
+    let text = put(inst, 'HOST_SOURCE = None', 'HOST_SOURCE = ' + JSON.stringify(host));
+    text = put(text, "EXTENSION_IDS = ['mmjnppnijhblimofghdejjdhfgdjgcol']",
+      'EXTENSION_IDS = ' + JSON.stringify([...new Set(['mmjnppnijhblimofghdejjdhfgdjgcol', chrome.runtime.id])]));
+    const bytes = new TextEncoder().encode(text);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    const id = await chrome.downloads.download({
+      // .txt, а не .py: Chrome держит загрузку .py без клика пользователя как «опасную», а Python запустит файл с любым расширением
+      url: 'data:text/plain;base64,' + btoa(bin), filename: 'gigamcp-install-host.txt', conflictAction: 'overwrite', saveAs: false,
+    });
+    return new Promise((resolve, reject) => {
+      const check = async () => {
+        const [d] = await chrome.downloads.search({ id });
+        if (d?.state === 'complete') { chrome.downloads.onChanged.removeListener(onChange); resolve({ path: d.filename }); }
+        else if (d?.state === 'interrupted') { chrome.downloads.onChanged.removeListener(onChange); reject(new McpError(`Скачивание прервано: ${d.error}`)); }
+      };
+      const onChange = (delta) => { if (delta.id === id) check(); };
+      chrome.downloads.onChanged.addListener(onChange);
+      check();
     });
   },
 

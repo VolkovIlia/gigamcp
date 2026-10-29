@@ -1,7 +1,7 @@
 // E2E: настоящее расширение в Chromium + макет giga.chat + тестовые MCP-серверы.
 import { createRequire } from 'node:module';
-import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
@@ -195,9 +195,27 @@ try {
   const sentDemo = await page.evaluate(() => window.__sent);
   assert.match(sentDemo[0], /\[MCP-КОНТЕКСТ v1 #/, 'набор инструментов изменился — контекст обновлён');
   assert.match(sentDemo[0], /demo\/add/);
-  ok('вызов инструмента локальной программы из чата (авто-режим): 7 + 8 = 15');
+  assert.ok(sentDemo[0].includes(`Домашняя папка: ${homedir()}.`), 'помощник сообщил папки компьютера, и они дошли до модели');
+  ok('вызов инструмента локальной программы из чата (авто-режим): 7 + 8 = 15, модель знает папки компьютера');
   await page.waitForTimeout(300);
   await page.screenshot({ path: join(SHOTS, 'panel-all.png') });
+
+  // помощника нет, интернета нет: установщик собирается из файлов расширения и скачивается браузером
+  rmSync(join(profile, 'NativeMessagingHosts', 'ru.gigamcp.host.json'));
+  await page.locator('[data-gmcp=chip] .chip').click();
+  if (!(await panel.getByRole('button', { name: 'Проверить помощник' }).count())) await panel.getByText('Локальная программа (stdio)').click();
+  await panel.getByRole('button', { name: 'Проверить помощник' }).first().click();
+  await panel.getByText('Помощник не найден').waitFor({ timeout: 10000 });
+  await panel.getByRole('button', { name: 'Скачать установщик' }).click();
+  // под Playwright браузер сохраняет загрузки под служебными именами — ищем команду, а не имя файла
+  const cmd = await panel.locator('code').filter({ hasText: /^python3 "/ }).textContent({ timeout: 15000 });
+  const installer = cmd.match(/^python3 "(.+)"$/)?.[1];
+  assert.ok(installer, `команда для скачанного файла: ${cmd}`);
+  const inst = spawnSync('python3', [installer, '--browser-dir', profile], { encoding: 'utf8', env: { ...process.env, HOME: hostHome } });
+  assert.equal(inst.status, 0, inst.stderr + inst.stdout);
+  await panel.getByRole('button', { name: 'Проверить помощник' }).first().click();
+  await panel.getByText(/Помощник установлен \(v0\.2\.7/).waitFor({ timeout: 10000 });
+  ok('установщик скачан из самого расширения (без сети), команда с путём к файлу ставит помощник');
 } catch (e) {
   await fail(e, page);
 } finally {
