@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>ГигаЧат (макет)</title>
+<style>
+  body { margin: 0; background: radial-gradient(circle at 30% 20%, #1d3b4a, #0c1418 70%); color: #e8eaed; font: 15px/1.5 system-ui, sans-serif; min-height: 100vh; }
+  #root { max-width: 820px; margin: 0 auto; padding: 24px 16px 200px; }
+  .Message-styled__User { margin: 16px 0 16px auto; max-width: 70%; background: #2a2f36; padding: 10px 14px; border-radius: 16px; white-space: pre-wrap; }
+  .Message-styled__Bot { margin: 16px 0; }
+  pre { background: #11161a; padding: 10px; border-radius: 10px; overflow: auto; }
+  form { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); width: min(780px, calc(100vw - 32px)); background: #23282e; border-radius: 20px; padding: 10px 12px; }
+  textarea { width: 100%; background: transparent; border: 0; color: inherit; font: inherit; resize: none; outline: none; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row button { background: #2f353c; color: #ddd; border: 0; border-radius: 12px; padding: 4px 10px; }
+  .grow { flex: 1; }
+</style></head>
+<body><div id="root"><div class="ChatView-styled__Messages" id="msgs"></div></div>
+<form id="f" class="ChatInput-styled__Form">
+  <textarea id="chat-input-textarea" aria-label="Сообщение" rows="2" placeholder="Спросите ГигаЧат"></textarea>
+  <div class="row">
+    <button type="button" aria-label="Прикрепить файл">📎</button>
+    <div class="modes"><button type="button" class="InputModeMobile">Гига</button></div>
+    <span class="grow"></span>
+    <button type="button" id="stop" aria-label="Остановить генерацию" hidden>■</button>
+    <button type="submit" aria-label="Отправить">➤</button>
+  </div>
+</form>
+<script>
+  const ta = document.getElementById('chat-input-textarea');
+  const msgs = document.getElementById('msgs');
+  const stop = document.getElementById('stop');
+  window.__sent = [];
+  function md(text) {
+    // примитивный markdown: только блоки кода
+    const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    return esc(text).replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code class="language-${lang}">${code}</code></pre>`).replace(/\n/g, '<br>');
+  }
+  function botReply(user) {
+    if (user.startsWith('[MCP-РЕЗУЛЬТАТ]')) {
+      const m = user.match(/успешно\n([^\n]+)/);
+      return `Готово: ${m ? m[1] : '?'}`;
+    }
+    if (/посчитай|сколько/i.test(user)) {
+      return 'Сейчас посчитаю.\n```mcp\n{"call": "test/add", "arguments": {"a": 2, "b": 3}}\n```';
+    }
+    return 'Обычный ответ без инструментов.';
+  }
+  async function stream(text) {
+    const wrap = document.createElement('div');
+    wrap.className = 'Message-styled__Bot';
+    const body = document.createElement('div');
+    body.className = 'Markdown-styled__Root';
+    wrap.appendChild(body);
+    msgs.appendChild(wrap);
+    stop.hidden = false;
+    let acc = '';
+    for (const ch of text.match(/.{1,6}/gs)) { acc += ch; body.innerHTML = md(acc); await new Promise((r) => setTimeout(r, 25)); }
+    stop.hidden = true;
+  }
+  async function send() {
+    const v = ta.value;
+    if (!v.trim()) return;
+    window.__sent.push(v);
+    ta.value = '';
+    const u = document.createElement('div');
+    u.className = 'Message-styled__User';
+    u.textContent = v;
+    msgs.appendChild(u);
+    await new Promise((r) => setTimeout(r, 200));
+    await stream(botReply(v));
+  }
+  document.getElementById('f').addEventListener('submit', (e) => { e.preventDefault(); send(); });
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+</script></body></html>

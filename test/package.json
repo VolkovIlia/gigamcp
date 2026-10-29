@@ -1,0 +1,19 @@
+{
+  "name": "gigamcp-tests",
+  "version": "0.1.0",
+  "description": "Тесты GigaMCP",
+  "scripts": {
+    "test": "node node-tests.mjs",
+    "e2e": "node e2e.mjs",
+    "debug-bundle": "node build-inject.cjs"
+  },
+  "author": "Ilia Volkov",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "esbuild": "^0.24.2",
+    "express": "^4.22.3",
+    "zod": "^3.25.76"
+  },
+  "private": true
+}
