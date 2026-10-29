@@ -45,9 +45,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Архив расширения
         id: pack
-        run: echo "zip=$(scripts/pack.sh)" >> "$GITHUB_OUTPUT"
+        run: |
+          zip=$(bash scripts/pack.sh)
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
       - name: Описание релиза из CHANGELOG.md
-        run: scripts/release-notes.sh > dist/notes.md
+        run: bash scripts/release-notes.sh > dist/notes.md
       - uses: actions/upload-artifact@v4
         with:
           name: extension
