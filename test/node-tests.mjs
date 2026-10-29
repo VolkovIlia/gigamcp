@@ -160,7 +160,7 @@ await test('Контекст: полный и сжатый', () => {
   assert.equal(P.contextSignatureIn(full.text), full.signature);
   // в инструкции — пример настоящего вызова (инструмент без обязательных параметров)
   assert.deepEqual(P.extractCallsFromText(full.text).map((c) => c.name), ['test/ping']);
-  assert.match(full.text, /ГЛАВНОЕ: не отвечай, что у тебя нет доступа/);
+  assert.match(full.text, /Это НЕ твои встроенные навыки/);
 });
 await test('Разбор вызовов в разных видах', () => {
   assert.deepEqual(P.parseCallText('{"call": "test/add", "arguments": {"a": 1, "b": 2}}'), { name: 'test/add', arguments: { a: 1, b: 2 } });
@@ -181,7 +181,7 @@ await test('Подбор инструментов под запрос и нап�
   ] }];
   assert.equal(P.rankTools(srv, 'Покажи мои задачи на сегодня')[0].tool.name, 'tasks_list');
   const c = P.buildContext(srv, { query: 'Покажи мои задачи', forceCompact: true });
-  assert.match(c.text, /ПОДХОДЯЩИЕ ДЛЯ ЭТОГО ЗАПРОСА[\s\S]*taska\/tasks_list[\s\S]*ОСТАЛЬНЫЕ ИНСТРУМЕНТЫ[\s\S]*taska\/risks_create/);
+  assert.match(c.text, /ПОДХОДЯЩИЕ ДЛЯ ЭТОГО ЗАПРОСА[\s\S]*taska\/tasks_list[\s\S]*ОСТАЛЬНЫЕ ФУНКЦИИ[\s\S]*taska\/risks_create/);
   assert.equal(c.signature, P.buildContext(srv, { query: 'другое' }).signature, 'подпись не зависит от запроса');
   assert.ok(P.looksLikeRefusal('Я не могу показать задачи из Taska, так как у меня нет доступа к твоим данным в этом приложении.'));
   assert.ok(!P.looksLikeRefusal('Вот ваши задачи на сегодня: 1. Купить молоко'));
