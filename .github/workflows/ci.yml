@@ -43,23 +43,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Архив расширения
-        id: pack
-        run: |
-          zip=$(bash scripts/pack.sh)
-          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+      - name: Архив расширения и установщик помощника
+        run: bash scripts/pack.sh
       - name: Описание релиза из CHANGELOG.md
         run: bash scripts/release-notes.sh > dist/notes.md
       - uses: actions/upload-artifact@v4
         with:
           name: extension
-          path: |
-            ${{ steps.pack.outputs.zip }}
-            dist/notes.md
+          path: dist/
           if-no-files-found: error
 
   # Релиз выходит, когда в main попадает новая версия из extension/manifest.json:
-  # тег vX.Y.Z ставится на этот коммит, к релизу прикладывается архив из build.
+  # тег vX.Y.Z ставится на этот коммит, к релизу прикладываются архив и установщик из build.
   release:
     needs: [test, build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -98,5 +93,5 @@ jobs:
         env:
           V: ${{ steps.v.outputs.version }}
         run: |
-          gh release create "v$V" "dist/gigamcp-extension-v$V.zip" \
+          gh release create "v$V" "dist/gigamcp-extension-v$V.zip" dist/install-host.py \
             --title "GigaMCP $V" --notes-file dist/notes.md --target "$GITHUB_SHA"

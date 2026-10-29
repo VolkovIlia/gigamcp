@@ -29,7 +29,7 @@ async function __handle(m) {
   throw new Error('В отладочном режиме недоступно: ' + m.type);
 }
 const chrome = {
-  runtime: { lastError: null, sendMessage(m, cb) { __handle(m).then((d) => cb({ ok: true, data: d }), (e) => cb({ ok: false, error: e.message })); }, onMessage: { addListener() {} } },
+  runtime: { id: 'mmjnppnijhblimofghdejjdhfgdjgcol', lastError: null, getManifest: () => ({ version: '0.0.0' }), sendMessage(m, cb) { __handle(m).then((d) => cb({ ok: true, data: d }), (e) => cb({ ok: false, error: e.message })); }, onMessage: { addListener() {} } },
   storage: { onChanged: { addListener(f) { __listeners.push(f); } } },
 };
 `;

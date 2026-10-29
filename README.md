@@ -63,13 +63,17 @@ ID расширения постоянный — `mmjnppnijhblimofghdejjdhfgdjgc
 
 ### Локальные программы (stdio)
 
-Многие MCP-серверы — это программы, которые общаются через stdin/stdout: `wordcraft-cli mcp`, `npx …`, `uvx …`. Расширение запускает их через помощник на Python 3. Он входит в архив расширения и ставится один раз от обычного пользователя, без администратора (Python 3 уже есть в Astra Linux, РЕД ОС, Ubuntu и macOS):
+Многие MCP-серверы — это программы, которые общаются через stdin/stdout: `wordcraft-cli mcp`, `npx …`, `uvx …`. Браузер не даёт расширениям запускать программы, поэтому их запускает помощник на Python 3. Он ставится один раз на компьютер, от обычного пользователя, без администратора (Python 3 уже есть в Astra Linux, РЕД ОС, Ubuntu и macOS). Команду с кнопкой «Скопировать» покажет панель: **MCP → Локальная программа (stdio)**. Она выглядит так:
 
 ```bash
-python3 <папка расширения>/host/install-host.py
+curl -fsSL https://github.com/VolkovIlia/gigamcp/releases/download/vX.Y.Z/install-host.py | python3 -
 ```
 
+В Windows то же самое выполняется в «Командной строке» (cmd) с `python` вместо `python3`. Из распакованного архива можно и так: `python3 <папка расширения>/host/install-host.py`.
+
 Скрипт кладёт помощник в `~/.local/share/gigamcp` и регистрирует его в найденных браузерах: Chrome, Chromium, Яндекс Браузер, Edge, Brave, Vivaldi, Opera. Отдельно запускать ничего не нужно: браузер сам стартует помощник, когда он понадобится.
+
+Браузеры из Flatpak (например, Chromium в Fedora) живут в песочнице и не видят программ компьютера. Для них скрипт регистрирует помощник внутри `~/.var/app/<браузер>` и разрешает браузеру запускать его вне песочницы (`flatpak override --user --talk-name=org.freedesktop.Flatpak`). После установки такой браузер нужно перезапустить.
 
 Дальше в панели: **MCP → Локальная программа (stdio)**. Например, для [WordCraft](https://github.com/storytold/wordcraft/blob/main/docs/mcp.md):
 
@@ -80,7 +84,7 @@ python3 <папка расширения>/host/install-host.py
 
 Чтобы управлять уже открытым окном WordCraft, запустите его с `--control 7981`, а в аргументах укажите `mcp --connect 127.0.0.1:7981`.
 
-Если серверы уже описаны в конфиге Claude Desktop или Cursor, вставьте его в **Импорт конфига**: добавятся все сразу. Удалить помощник: `python3 host/install-host.py --uninstall`.
+Если серверы уже описаны в конфиге Claude Desktop или Cursor, вставьте его в **Импорт конфига**: добавятся все сразу. Удалить помощник: та же команда с `--uninstall` в конце (`… | python3 - --uninstall`).
 
 <br clear="right">
 

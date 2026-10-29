@@ -729,8 +729,12 @@
         ${ui.localOpen ? `<div class="add">
           <div class="hint">${ui.host == null ? 'Локальные программы запускает помощник на Python 3. Он ставится один раз, без прав администратора.'
             : ui.host.ok ? `Помощник установлен (v${esc(ui.host.version)}, Python ${esc(ui.host.python)}).`
-            : 'Помощник не найден. Установите его один раз из папки расширения: <code>python3 host/install-host.py</code>'}
-            <button class="btn small" data-act="host-check" style="margin-left:6px">Проверить помощник</button></div>
+            : `Помощник не найден. Выполните один раз в терминале${isWindows() ? ' (cmd)' : ''}:`}
+            ${ui.host?.ok === false ? '' : '<button class="btn small" data-act="host-check" style="margin-left:6px">Проверить помощник</button>'}</div>
+          ${ui.host?.ok === false ? `<div style="display:flex;gap:6px;align-items:flex-start"><code style="flex:1;word-break:break-all">${esc(hostInstallCommand())}</code>
+            <button class="btn small" data-act="copy-host-cmd">Скопировать</button></div>
+          <div class="hint">Браузер из Flatpak после установки перезапустите.
+            <button class="btn small" data-act="host-check" style="margin-left:6px">Проверить помощник</button></div>` : ''}
           <input type="text" data-field="l_name" placeholder="Название, например WordCraft" value="${esc(ui.local.name)}" aria-label="Название">
           <input type="text" data-field="l_command" placeholder="Команда, например wordcraft-cli" value="${esc(ui.local.command)}" aria-label="Команда">
           <input type="text" data-field="l_args" placeholder="Аргументы, например mcp" value="${esc(ui.local.args)}" aria-label="Аргументы">
@@ -791,6 +795,15 @@
     renderPanel();
   }
 
+  const isWindows = () => /Windows/.test(navigator.userAgent);
+  // Установщик из релиза той же версии, что и расширение: со встроенным помощником, без папки расширения.
+  // У копии из магазина свой ID — передаём его, чтобы помощник пускал именно её.
+  function hostInstallCommand() {
+    const url = `https://github.com/VolkovIlia/gigamcp/releases/download/v${chrome.runtime.getManifest().version}/install-host.py`;
+    const id = chrome.runtime.id === 'mmjnppnijhblimofghdejjdhfgdjgcol' ? '' : ` --extension-id ${chrome.runtime.id}`;
+    return `curl -fsSL ${url} | ${isWindows() ? 'python' : 'python3'} -${id}`;
+  }
+
   function authError(err) {
     // фон мог перезапуститься, пока пользователь входил: вход тогда завершится сам, а панель обновится
     if (/message port closed|Receiving end does not exist/i.test(err.message)) flash('Если вход в открытом окне завершён, сервер подключится автоматически.', 'info');
@@ -819,6 +832,10 @@
         case 'toggle-local': ui.localOpen = !ui.localOpen; if (ui.localOpen && !ui.host) checkHost(); renderPanel(); break;
         case 'toggle-import': ui.importOpen = !ui.importOpen; renderPanel(); break;
         case 'host-check': await checkHost(); break;
+        case 'copy-host-cmd':
+          await navigator.clipboard.writeText(hostInstallCommand());
+          flash('Команда скопирована — вставьте её в терминал', 'ok');
+          break;
         case 'expand': ui.expanded.has(id) ? ui.expanded.delete(id) : ui.expanded.add(id); renderPanel(); break;
         case 'toggle-server': await bg('updateServer', { id, patch: { enabled: !s.enabled } }); break;
         case 'refresh': await withBusy(id, async () => { const r = await bg('refreshServer', { id }); flash(r.ok ? `«${s.name}»: список инструментов обновлён` : r.error, r.ok ? 'ok' : 'error'); }); break;

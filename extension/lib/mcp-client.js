@@ -315,7 +315,7 @@ export class McpClient {
       if (!state.closed) {
         const missing = /not found|не найден/i.test(le);
         fail(new McpError(missing
-          ? 'Помощник для локальных программ не установлен. Выполните: python3 <папка расширения>/host/install-host.py'
+          ? 'Помощник для локальных программ не установлен. Команда для установки — в панели MCP, раздел «Локальная программа (stdio)».'
           : `Соединение с помощником закрыто${le ? ': ' + le : ''}`, { hostMissing: missing, streamClosed: !missing }));
       }
     });

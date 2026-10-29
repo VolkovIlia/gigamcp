@@ -1,7 +1,7 @@
 // Проверка MCP-клиента, OAuth, помощника для локальных программ и протокола в Node.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { writeFileSync, mkdtempSync, readFileSync, existsSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { writeFileSync, mkdtempSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -128,17 +128,89 @@ await test('понятная ошибка, если программы нет', 
   const e = await c.listTools().catch((x) => x);
   assert.match(e.message, /Не удалось запустить «no-such-mcp-program»/);
 });
+// Запускает install-host.py; в выводе и stdout, и stderr, чтобы при падении был виден traceback
+const runInstaller = (args, env) => new Promise((resolve) => {
+  const p = spawn('python3', [join(here, '../extension/host/install-host.py'), ...args], { env });
+  let o = ''; p.stdout.on('data', (d) => (o += d)); p.stderr.on('data', (d) => (o += d));
+  p.on('exit', (code) => resolve({ code, o }));
+});
 await test('установка без прав администратора и удаление', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gmcp-prof-'));
-  const run = (args) => new Promise((resolve) => { const p = spawn('python3', [join(here, '../extension/host/install-host.py'), ...args]); let o = ''; p.stdout.on('data', (d) => (o += d)); p.on('exit', (code) => resolve({ code, o })); });
+  const env = { ...process.env, HOME: mkdtempSync(join(tmpdir(), 'gmcp-home-')) };  // не трогать настоящий ~/.local/share/gigamcp
+  const run = (args) => runInstaller(args, env);
   const r = await run(['--browser-dir', dir]);
   assert.equal(r.code, 0, r.o);
   const m = JSON.parse(readFileSync(join(dir, 'NativeMessagingHosts', 'ru.gigamcp.host.json'), 'utf8'));
   assert.deepEqual(m.allowed_origins, ['chrome-extension://mmjnppnijhblimofghdejjdhfgdjgcol/']);
   assert.ok(existsSync(m.path));
   const u = await run(['--uninstall', '--browser-dir', dir]);
-  assert.equal(u.code, 0);
+  assert.equal(u.code, 0, u.o);
   assert.equal(existsSync(join(dir, 'NativeMessagingHosts', 'ru.gigamcp.host.json')), false);
+});
+// Запускает помощник, как браузер, и возвращает ответ на hello
+const nativeHello = (path, env) => new Promise((resolve, reject) => {
+  const p = spawn(path, ['chrome-extension://mmjnppnijhblimofghdejjdhfgdjgcol/'], { env });
+  let buf = Buffer.alloc(0);
+  p.stdout.on('data', (d) => {
+    buf = Buffer.concat([buf, d]);
+    if (buf.length >= 4 && buf.length >= 4 + buf.readUInt32LE(0)) { p.kill(); resolve(JSON.parse(buf.subarray(4, 4 + buf.readUInt32LE(0)))); }
+  });
+  p.on('exit', (code) => reject(new Error(`помощник завершился с кодом ${code}`)));
+  const b = Buffer.from(JSON.stringify({ type: 'hello' }));
+  const h = Buffer.alloc(4); h.writeUInt32LE(b.length);
+  p.stdin.write(Buffer.concat([h, b]));
+});
+await test('Flatpak-браузер: манифест в его песочнице, помощник на хосте, разрешение только там, где стоит GigaMCP', async () => {
+  // поддельные flatpak и flatpak-spawn: первый записывает аргументы, второй, как настоящий, запускает команду «на хосте»
+  const home = mkdtempSync(join(tmpdir(), 'gmcp-home-'));
+  const bin = join(home, 'bin');
+  const appDir = join(home, '.var/app/org.chromium.Chromium');
+  const otherDir = join(home, '.var/app/com.google.Chrome');
+  mkdirSync(join(appDir, 'config/chromium/Default'), { recursive: true });
+  mkdirSync(join(otherDir, 'config/google-chrome/Default'), { recursive: true });
+  // папка настроек появляется сразу после установки расширения, Preferences браузер дописывает позже
+  mkdirSync(join(appDir, 'config/chromium/Default/Local Extension Settings/mmjnppnijhblimofghdejjdhfgdjgcol'), { recursive: true });
+  writeFileSync(join(otherDir, 'config/google-chrome/Default/Preferences'), '{"extensions":{"settings":{}}}');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'flatpak'), `#!/bin/sh\necho "$@" >> "${join(home, 'flatpak.log')}"\n`, { mode: 0o755 });
+  writeFileSync(join(bin, 'flatpak-spawn'), '#!/bin/sh\n[ "$1" = --host ] || exit 9\nshift\nexec "$@"\n', { mode: 0o755 });
+  const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` };
+  delete env.XDG_CONFIG_HOME;
+  const run = (args) => runInstaller(args, env);
+  const r = await run([]);
+  assert.equal(r.code, 0, r.o);
+  const mpath = join(appDir, 'config/chromium/NativeMessagingHosts/ru.gigamcp.host.json');
+  const m = JSON.parse(readFileSync(mpath, 'utf8'));
+  assert.ok(m.path.startsWith(appDir + '/'), `помощник должен лежать внутри песочницы: ${m.path}`);
+  const log = readFileSync(join(home, 'flatpak.log'), 'utf8');
+  assert.match(log, /override --user --talk-name=org\.freedesktop\.Flatpak org\.chromium\.Chromium/);
+  assert.doesNotMatch(log, /com\.google\.Chrome/, 'браузеру без GigaMCP разрешение не выдаётся');
+  assert.ok(existsSync(join(otherDir, 'config/google-chrome/NativeMessagingHosts/ru.gigamcp.host.json')));
+  assert.match(r.o, /flatpak override --user --talk-name=org\.freedesktop\.Flatpak com\.google\.Chrome/);
+  assert.equal((await nativeHello(m.path, env)).type, 'hello');
+  const u = await run(['--uninstall']);
+  assert.equal(u.code, 0, u.o);
+  assert.equal(existsSync(mpath), false);
+  assert.equal(existsSync(m.path), false);
+});
+await test('установщик из релиза ставит помощник без папки расширения (curl … | python3 -)', async () => {
+  const pk = spawnSync('bash', [join(here, '../scripts/pack.sh')], { encoding: 'utf8' });
+  assert.equal(pk.status, 0, pk.stderr);
+  const home = mkdtempSync(join(tmpdir(), 'gmcp-home-'));
+  const dir = mkdtempSync(join(tmpdir(), 'gmcp-prof-'));
+  const env = { ...process.env, HOME: home };
+  // копия из магазина: свой ID приходит из команды в панели, а ID из прежнего манифеста (распакованная копия) остаётся
+  const storeId = 'abcdefghijklmnopabcdefghijklmnop';
+  const other = 'chrome-extension://ponmlkjihgfedcbaponmlkjihgfedcba/';
+  mkdirSync(join(dir, 'NativeMessagingHosts'));
+  writeFileSync(join(dir, 'NativeMessagingHosts', 'ru.gigamcp.host.json'), JSON.stringify({ allowed_origins: [other] }));
+  const install = (args) => spawnSync('python3', ['-', '--browser-dir', dir, ...args], { input: readFileSync(join(here, '../dist/install-host.py')), cwd: home, env, encoding: 'utf8' });
+  const r = install(['--extension-id', storeId]);
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  const m = JSON.parse(readFileSync(join(dir, 'NativeMessagingHosts', 'ru.gigamcp.host.json'), 'utf8'));
+  assert.deepEqual(new Set(m.allowed_origins), new Set(['chrome-extension://mmjnppnijhblimofghdejjdhfgdjgcol/', `chrome-extension://${storeId}/`, other]));
+  assert.equal((await nativeHello(m.path, env)).type, 'hello');
+  assert.notEqual(install(['--extension-id', 'not-an-id']).status, 0, 'неверный ID отклоняется');
 });
 
 console.log('Протокол');

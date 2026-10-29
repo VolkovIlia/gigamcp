@@ -21,8 +21,10 @@ writeFileSync(join(cfgDir, 'servers.json'), JSON.stringify({ mcpServers: { demo:
 
 
 const profile = mkdtempSync(join(tmpdir(), 'gmcp-prof-'));
-// помощник для локальных программ ставится в профиль браузера — как у пользователя, без администратора
-spawnSync('python3', [join(here, '../extension/host/install-host.py'), '--browser-dir', profile], { stdio: 'ignore' });
+// помощник для локальных программ ставится в профиль браузера — как у пользователя, без администратора;
+// свой HOME, чтобы не трогать настоящий ~/.local/share/gigamcp
+const hostHome = mkdtempSync(join(tmpdir(), 'gmcp-home-'));
+spawnSync('python3', [join(here, '../extension/host/install-host.py'), '--browser-dir', profile], { stdio: 'ignore', env: { ...process.env, HOME: hostHome } });
 const ctx = await chromium.launchPersistentContext(profile, {
   channel: 'chromium', headless: true, viewport: { width: 1280, height: 860 }, locale: 'ru-RU',
   args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
