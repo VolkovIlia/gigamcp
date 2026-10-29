@@ -35,11 +35,20 @@
   }
   function botReply(user) {
     if (user.startsWith('[MCP-РЕЗУЛЬТАТ]')) {
+      // посреди цепочки ГигаЧат уходит во встроенные навыки (как со «Создал файл» в настоящем чате)
+      if (/успешно\nчерновик\n/.test(user)) return 'Ошибка при вызове инструмента. Создал файл поздравление.txt';
       const m = user.match(/успешно\n([^\n]+)/);
       return `Готово: ${m ? m[1] : '?'}`;
     }
     if (user.startsWith('[MCP-НАПОМИНАНИЕ]')) {
+      if (/документ/i.test(user)) return '```mcp\n{"call": "test/echo", "arguments": {"text": "документ сохранён"}}\n```';
       return '```mcp\n{"call": "test/echo", "arguments": {"text": "задача 1"}}\n```';
+    }
+    if (/создай документ/i.test(user)) {
+      return '```mcp\n{"call": "test/echo", "arguments": {"text": "черновик"}}\n```';
+    }
+    if (/через echo/i.test(user)) {
+      return '```mcp\n{"call": "test/echo", "arguments": {"text": "привет"}}\n```';
     }
     if (/список дел/i.test(user)) {
       return 'Ошибка при вызове инструмента. Ответ: Этот запрос относится к поиску данных в системе управления задачами.';

@@ -333,13 +333,17 @@
   const nudged = new Set(JSON.parse(sessionStorage.getItem(nudgeKey) || '[]'));
   let nudgeHost = null;
 
+  // Последний запрос человека перед ответом модели. Результаты вызовов пропускаем (afterResult): посреди цепочки
+  // ГигаЧат тоже уходит во встроенные навыки. Перед напоминанием — null, чтобы не напоминать по кругу.
   function lastHumanQuery(msgs, before) {
+    let afterResult = false;
     for (let i = before - 1; i >= 0; i--) {
       if (msgs[i].role !== 'user') continue;
       const t = msgs[i].el.innerText || '';
-      if (t.includes(P.RES_OPEN) || t.includes(P.NUDGE_OPEN)) return null; // предыдущий шаг уже служебный
+      if (t.includes(P.NUDGE_OPEN)) return null;
+      if (t.includes(P.RES_OPEN)) { afterResult = true; continue; }
       const j = t.lastIndexOf('Запрос пользователя:');
-      return { query: j >= 0 ? t.slice(j + 20).trim() : t.trim(), withContext: t.includes(P.CTX_OPEN) };
+      return { query: j >= 0 ? t.slice(j + 20).trim() : t.trim(), withContext: t.includes(P.CTX_OPEN), afterResult };
     }
     return null;
   }
@@ -361,6 +365,7 @@
     if (!q) return;
     const reason = P.nudgeReason(text, activeServers(), q.query);
     if (!reason) return;
+    if (q.afterResult && reason === 'missed') return; // после результата итоговый ответ без вызова — норма
     const prev = textSeen.get(m.el);
     if (!prev || prev.text !== text || Date.now() - prev.at < STABLE_MS) { isStable(m.el); scheduleScan(STABLE_MS); return; }
     const query = q.query;
@@ -428,7 +433,10 @@
     }
     entry.status = 'done';
     markDone(entry.key);
-    entry.resultText = P.formatResults(entry.calls.map((c) => ({ name: c.resolved || c.name, ok: c.status === 'done', text: c.result?.text })), { maxChars: state.settings.maxResultChars });
+    const msgs = getMessages();
+    const at = msgs.findIndex((m) => m.el === entry.el);
+    const query = at >= 0 ? lastHumanQuery(msgs, at)?.query : '';
+    entry.resultText = P.formatResults(entry.calls.map((c) => ({ name: c.resolved || c.name, ok: c.status === 'done', text: c.result?.text })), { maxChars: state.settings.maxResultChars, query });
     if (state.settings.autoSend) {
       entry.sent = true; renderCard(entry);
       try { await sendToChat(entry.resultText); } catch (e) { entry.sent = false; entry.note = e.message; }

@@ -281,6 +281,12 @@ await test('Большой сервер как Taska: «taska_*» не пута�
   assert.match(c.text, /module239_action_item/);
   assert.match(c.text, /твой ответ — только блок кода mcp[\s\S]*\[\/MCP-КОНТЕКСТ\]$/);
   assert.equal(P.nudgeReason('Ошибка при вызове инструмента. Ответ: Этот запрос относится к поиску данных в системе управления задачами.', srv, q), 'deflect');
+  // настоящий ответ ГигаЧата бывает только с этой фразой; кириллица после «ошибк» не ловилась через \w
+  assert.equal(P.nudgeReason('Ошибка при вызове инструмента', srv, 'Привет'), 'deflect');
+  assert.equal(P.nudgeReason('Подходящие навыки не найдены', srv, 'Привет'), 'deflect');
+  assert.equal(P.nudgeReason('Я не получила доступа к данным', srv, 'Привет'), 'refusal');
+  assert.equal(P.nudgeReason('У меня отсутствует доступ к почте', srv, 'Привет'), 'refusal');
+  assert.equal(P.nudgeReason('Я не могу подключиться к серверу', srv, 'Привет'), 'refusal');
   assert.equal(P.nudgeReason('Вот что я нашёл в интернете про задачи.', srv, q), 'missed');
   assert.equal(P.nudgeReason('Привет! Чем помочь?', srv, 'Привет'), null);
   assert.match(P.buildNudge(srv, q), /"call": "taska_stage\/tasks_list"/);

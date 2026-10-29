@@ -120,6 +120,25 @@ try {
   await page.waitForFunction(() => window.__sent.filter((x) => x.startsWith('[MCP-НАПОМИНАНИЕ]')).length >= 2 && window.__sent.filter((x) => x.startsWith('[MCP-РЕЗУЛЬТАТ]')).length >= 4, null, { timeout: 25000 });
   ok('«Ошибка при вызове инструмента» (встроенные навыки) → напоминание → вызов');
 
+  // посреди цепочки: после [MCP-РЕЗУЛЬТАТ] ГигаЧат ушёл во встроенные навыки → напоминание с исходным запросом → вызов
+  const nudgesBefore = await page.evaluate(() => window.__sent.filter((x) => x.startsWith('[MCP-НАПОМИНАНИЕ]')).length);
+  await page.locator('#chat-input-textarea').fill('Создай документ с поздравлением');
+  await page.keyboard.press('Enter');
+  await page.getByText('Готово: документ сохранён').waitFor({ timeout: 30000 });
+  const nudgeMid = await page.evaluate((n) => window.__sent.filter((x) => x.startsWith('[MCP-НАПОМИНАНИЕ]'))[n], nudgesBefore);
+  assert.match(nudgeMid, /Создай документ с поздравлением/, 'напоминание повторяет исходный запрос, а не служебный результат');
+  ok('после результата ГигаЧат ушёл во встроенные навыки → напоминание → цепочка продолжена через MCP');
+
+  // итоговый ответ после результата — не повод напоминать, даже если запрос явно про функцию (иначе задача выполнится дважды)
+  const nudgesBeforeFinal = await page.evaluate(() => window.__sent.filter((x) => x.startsWith('[MCP-НАПОМИНАНИЕ]')).length);
+  await page.locator('#chat-input-textarea').fill('Верни текст через echo');
+  await page.keyboard.press('Enter');
+  await page.getByText('Готово: привет').waitFor({ timeout: 20000 });
+  await page.waitForTimeout(3000);
+  assert.equal(await page.evaluate(() => window.__sent.filter((x) => x.startsWith('[MCP-НАПОМИНАНИЕ]')).length), nudgesBeforeFinal, 'после итогового ответа напоминания нет');
+  assert.equal(await page.locator('[data-gmcp=nudge]').count(), 0, 'и кнопки напоминания нет');
+  ok('итоговый ответ после результата: напоминания нет');
+
   // перезагрузка: история не выполняется повторно
   await page.reload();
   await page.locator('[data-gmcp=chip] .chip').waitFor();
