@@ -11,7 +11,7 @@ const DEFAULT_SETTINGS = {
   enabled: true,          // MCP включён в чате
   autoRun: false,         // выполнять вызовы без подтверждения
   autoSend: true,         // отправлять результат в чат автоматически
-  maxResultChars: 15000,  // лимит текста результата на один ответ
+  maxResultChars: 60000,  // лимит текста результатов в одном сообщении (поле ввода ГигаЧата принимает до 100 000)
   contextMaxChars: 14000, // больше — переходим в компактный каталог инструментов
   maxAutoRounds: 12,      // защита от бесконечного цикла в авто-режиме
   toolTimeoutSec: 120,
@@ -44,6 +44,7 @@ async function load() {
   const { servers = [], secrets = {}, settings = {} } = await chrome.storage.local.get(['servers', 'secrets', 'settings']);
   const merged = { ...DEFAULT_SETTINGS, ...settings };
   if (merged.contextMaxChars === 24000) merged.contextMaxChars = DEFAULT_SETTINGS.contextMaxChars; // прежнее значение по умолчанию (до 0.2.4)
+  if (merged.maxResultChars === 15000) merged.maxResultChars = DEFAULT_SETTINGS.maxResultChars; // прежнее значение по умолчанию (до 0.2.9)
   return { servers, secrets, settings: merged };
 }
 

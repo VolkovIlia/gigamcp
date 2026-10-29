@@ -26,6 +26,8 @@
     // куда вставлять карточку внутри ответа и что сворачивать в сообщении пользователя
     assistantContent: '[class*="MessageItem-styled__AssistantContent"]',
     userBubble: '[class*="MessageItem-styled__UserBubble"]',
+    // шаги «Думаю над ответом»: ToolCallLogBlock → LogTimeline-styled__ItemLabel («Ошибка при вызове инструмента»…)
+    toolLogLabel: '[class*="LogTimeline-styled__ItemLabel"]',
     // запасной вариант для ответов: блоки с отрендеренным markdown
     markdown: '[class*="Markdown"], [class*="markdown"]',
     modeButtonText: /^(Рассуждение|Исследование|Гига)$/,
@@ -37,7 +39,7 @@
   const AUTO_WINDOW_MS = 15 * 60e3; // авто-выполнение только для ответов на недавнюю отправку
 
   // ---------- состояние ----------
-  let state = { servers: [], settings: { enabled: true, autoRun: false, autoSend: true, maxResultChars: 15000, contextMaxChars: 14000, maxAutoRounds: 12 }, redirectUri: '' };
+  let state = { servers: [], settings: { enabled: true, autoRun: false, autoSend: true, maxResultChars: 60000, contextMaxChars: 14000, maxAutoRounds: 12 }, redirectUri: '' };
   let lastSendAt = 0;
   let autoRounds = 0;
   let bypass = false;
@@ -107,11 +109,12 @@
     return btns.find((b) => SEL.sendLabel.test(labelOf(b))) || form.querySelector('button[type="submit"]') || null;
   }
 
-  function isGenerating() {
+  function stopButton() {
     const form = getForm();
     const scope = form ? form.parentElement || form : document;
-    return [...scope.querySelectorAll('button')].some((b) => !isOurs(b) && b.getClientRects().length > 0 && SEL.stopLabel.test(labelOf(b)));
+    return [...scope.querySelectorAll('button')].find((b) => !isOurs(b) && b.getClientRects().length > 0 && SEL.stopLabel.test(labelOf(b))) || null;
   }
+  const isGenerating = () => !!stopButton();
 
   function setInputValue(text) {
     const ta = getInput();
@@ -280,10 +283,15 @@
     return now - prev.at >= STABLE_MS;
   }
 
-  let scanTimer = null;
+  let scanTimer = null, scanDue = 0;
+  // Уже назначенный скан не откладываем: при чистом debounce поток мутаций (шаги «Думаю над ответом»,
+  // печать ответа) отодвигал бы скан до конца генерации, и зацикливание не было бы видно.
   function scheduleScan(ms = 250) {
+    const due = Date.now() + ms;
+    if (scanTimer && scanDue <= due) return;
     clearTimeout(scanTimer);
-    scanTimer = setTimeout(scan, ms);
+    scanDue = due;
+    scanTimer = setTimeout(() => { scanTimer = null; scan(); }, ms);
   }
 
   function scan() {
@@ -330,6 +338,7 @@
       }
     });
     checkRefusal(msgs, lastAssistantIdx);
+    checkLoop(msgs, lastAssistantIdx);
     if (pendingRecheck) scheduleScan(STABLE_MS / 2);
   }
 
@@ -361,22 +370,44 @@
     missed: 'Похоже, запрос про подключённую систему, но ГигаЧат не вызвал функцию.',
   };
 
+  // ГигаЧат крутится во встроенных навыках внутри одного ответа («Думаю над ответом»: поиск навыков → дата →
+  // «Ошибка при вызове инструмента» десятки раз) и не пишет блок mcp. Ждать конца бессмысленно — останавливаем,
+  // а checkRefusal после остановки напомнит про функции (в авто-режиме сам, иначе кнопкой).
+  const looped = new WeakSet();
+  function checkLoop(msgs, lastIdx) {
+    if (lastIdx < 0 || !mcpOn() || !isGenerating()) return;
+    const m = msgs[lastIdx];
+    if (looped.has(m.el) || !chatHasContext(null)) return;
+    // только явный сбой: «Ошибка при вызове инструмента» дважды. Одни поиски навыков — обычный ответ
+    // в «Исследовании»/«Рассуждении», его останавливать нельзя.
+    const errors = [...m.el.querySelectorAll(SEL.toolLogLabel)].filter((x) => /ошибк\p{L}* при вызов/iu.test(x.textContent || '')).length;
+    if (errors < 2) return;
+    looped.add(m.el);
+    stopButton()?.click();
+    scheduleScan(STABLE_MS);
+  }
+
   function checkRefusal(msgs, lastIdx) {
     if (lastIdx < 0 || !mcpOn() || isGenerating()) return;
     const m = msgs[lastIdx];
     if (msgs.slice(lastIdx + 1).some((x) => x.role === 'user')) return;
     const text = m.el.innerText || '';
-    if (!text.trim() || isServiceText(text) || extractCalls(m.el).length) return;
+    const wasLoop = looped.has(m.el);
+    if ((!text.trim() && !wasLoop) || isServiceText(text) || extractCalls(m.el).length) return;
     if (!chatHasContext(null)) return;
     const q = lastHumanQuery(msgs, lastIdx);
     if (!q) return;
-    const reason = P.nudgeReason(text, activeServers(), q.query);
+    // шаги могли свернуться и пропасть из innerText — остановленное зацикливание считаем уходом во встроенные навыки
+    const reason = wasLoop ? 'deflect' : P.nudgeReason(text, activeServers(), q.query);
     if (!reason) return;
     if (q.afterResult && reason === 'missed') return; // после результата итоговый ответ без вызова — норма
     const prev = textSeen.get(m.el);
     if (!prev || prev.text !== text || Date.now() - prev.at < STABLE_MS) { isStable(m.el); scheduleScan(STABLE_MS); return; }
     const query = q.query;
-    const key = `${location.pathname}#${P.hash(text.slice(0, 400))}`;
+    // ключ — само сообщение, а не его текст: остановленные зацикливания выглядят одинаково, и второе осталось бы без напоминания
+    const msgId = m.el.getAttribute('data-message-id') || m.el.querySelector('[data-message-id]')?.getAttribute('data-message-id')
+      || `${msgs.slice(0, lastIdx + 1).filter((x) => x.role === 'assistant').length}:${P.hash(text.slice(0, 400))}`;
+    const key = `${location.pathname}#${msgId}`;
     if (nudged.has(key)) return;
     const send = () => {
       nudged.add(key);

@@ -319,7 +319,7 @@ await test('Подсказка к каждому сообщению и боль�
   const h = P.buildHint(fakeServers, 'Сложи два числа');
   assert.ok(h.startsWith(P.HINT_OPEN));
   assert.match(h, /test\/add/, 'подходящая функция названа');
-  assert.match(P.buildHint(fakeServers, 'Ещё раз, внимательнее', ['test/echo']), /уже вызывал: test\/echo/, 'продолжение без совпадений — уже вызванные функции');
+  assert.match(P.buildHint(fakeServers, 'Ещё раз, внимательнее', ['test/ping']), /уже вызывал: test\/ping/, 'продолжение без совпадений — уже вызванные функции');
   // функции, меняющие данные (readOnlyHint: false), подсказка не предлагает — ни по словам, ни из уже вызванных
   const deck = [{ id: 'deck', name: 'Deck', tools: [
     { name: 'new_presentation', description: 'Start a new presentation.', annotations: { readOnlyHint: false } },
@@ -327,10 +327,26 @@ await test('Подсказка к каждому сообщению и боль�
     { name: 'inspect_slide', description: 'Inspect a slide.', annotations: { readOnlyHint: true } },
   ] }];
   const vague = P.buildHint(deck, 'Ещё раз, внимательнее', ['deck/new_presentation', 'deck/inspect_slide']);
-  assert.match(vague, /уже вызывал: deck\/inspect_slide\.$/);
+  assert.match(vague, /уже вызывал: deck\/inspect_slide\./);
   const bySlide = P.buildHint(deck, 'Что на других слайдах?', []);
   assert.match(bySlide, /deck\/inspect_slide/);
   assert.doesNotMatch(bySlide + vague, /new_presentation|add_slide/);
+  // пример вызова модель копирует буквально: в нём никогда не должно быть функций, меняющих данные
+  const w = { readOnlyHint: false }, r = { readOnlyHint: true };
+  const obj = (props = {}, required = []) => ({ type: 'object', properties: props, required });
+  const dc = [{ id: 'deckcraft', name: 'DeckCraft', tools: [
+    { name: 'new_presentation', description: 'Start a new presentation (one title slide).', annotations: w },
+    { name: 'open_presentation', description: 'Open a .deckcraft or .pptx file by path.', inputSchema: obj({ path: { type: 'string' } }, ['path']), annotations: w },
+    { name: 'add_slide', description: 'Add a slide.', annotations: w },
+    { name: 'inspect_document', description: 'Slides, sections, theme of the presentation.', annotations: r },
+    { name: 'inspect_slide', description: 'Shapes and text of one slide.', inputSchema: obj({ index: { type: 'integer' } }, ['index']), annotations: r },
+  ] }];
+  for (const q of ['О чем открытая презентация?', 'Почему только Ц2? Там есть и другие проекты, смотри всю презентацию']) {
+    const examples = [P.buildContext(dc, { query: q }).text, P.buildNudge(dc, q), P.buildHint(dc, q, ['deckcraft/new_presentation'])]
+      .map((t) => (t.match(/```mcp\n(.*)\n```/) || [])[1] || '');
+    for (const e of examples) assert.doesNotMatch(e, /new_|open_|add_/, `${q}: ${e}`);
+    assert.match(examples[0], /deckcraft\/inspect_/, 'в контексте пример — функция чтения');
+  }
   // JSON ужимается без потерь — в лимит входит больше данных
   const pretty = JSON.stringify({ shapes: Array.from({ length: 40 }, (_, i) => ({ id: i, text: `ячейка ${i}` })) }, null, 2);
   const t = P.formatResults([{ name: 'x/y', ok: true, text: pretty }], { maxChars: 100000 });

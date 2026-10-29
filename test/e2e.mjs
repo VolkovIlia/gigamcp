@@ -141,6 +141,34 @@ try {
   assert.equal(await page.locator('[data-gmcp=nudge]').count(), 0, 'и кнопки напоминания нет');
   ok('итоговый ответ после результата: напоминания нет');
 
+  // «Думаю над ответом» по кругу во встроенных навыках (как на настоящем giga.chat) → GigaMCP сам жмёт «Остановить»,
+  // напоминает с исходным запросом, и цепочка идёт через MCP
+  const nudgesBeforeLoop = await page.evaluate(() => window.__sent.filter((x) => x.startsWith('[MCP-НАПОМИНАНИЕ]')).length);
+  for (let round = 1; round <= 2; round++) {
+    await page.evaluate(() => { window.__stopped = false; });
+    await page.locator('#chat-input-textarea').fill('Посмотри все слайды');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction((n) => document.body.innerText.split('Готово: все слайды прочитаны').length - 1 >= n, round, { timeout: 40000 });
+    assert.ok(await page.evaluate(() => window.__stopped), `зацикливание ${round} остановлено`);
+    const steps = await page.evaluate(() => [...document.querySelectorAll('[class*="ToolCallLogBlock"]')].pop().querySelectorAll('[class*="LogTimeline-styled__ItemLabel"]').length);
+    assert.ok(steps < 20, `остановлено рано, а не после 120 шагов: ${steps}`);
+  }
+  const loopNudges = await page.evaluate((n) => window.__sent.filter((x) => x.startsWith('[MCP-НАПОМИНАНИЕ]')).slice(n), nudgesBeforeLoop);
+  assert.equal(loopNudges.length, 2, 'на каждое зацикливание — своё напоминание');
+  for (const n of loopNudges) assert.match(n, /Посмотри все слайды/);
+  ok('два зацикливания подряд во встроенных навыках: оба остановлены, на каждое — напоминание с запросом, дальше вызов через MCP');
+
+  // обычный ответ с несколькими поисками, но без ошибок, останавливать нельзя
+  await page.evaluate(() => { window.__stopped = false; });
+  const nudgesBeforeResearch = await page.evaluate(() => window.__sent.filter((x) => x.startsWith('[MCP-НАПОМИНАНИЕ]')).length);
+  await page.locator('#chat-input-textarea').fill('Исследуй тему');
+  await page.keyboard.press('Enter');
+  await page.getByText('Исследование готово.').waitFor({ timeout: 20000 });
+  await page.waitForTimeout(2000);
+  assert.equal(await page.evaluate(() => window.__stopped), false, 'ответ без ошибок не остановлен');
+  assert.equal(await page.evaluate(() => window.__sent.filter((x) => x.startsWith('[MCP-НАПОМИНАНИЕ]')).length), nudgesBeforeResearch);
+  ok('поиски без ошибок («Исследование»): ответ не остановлен, напоминания нет');
+
   // перезагрузка: история не выполняется повторно
   await page.reload();
   await page.locator('[data-gmcp=chip] .chip').waitFor();

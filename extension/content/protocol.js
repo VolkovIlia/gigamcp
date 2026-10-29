@@ -147,9 +147,12 @@
   }
 
   function exampleCall(ranked) {
-    const best = ranked[0]?.score || 0;
-    const near = ranked.filter((r) => r.score >= best - 1);
-    const pick = near.find((r) => !(r.tool.inputSchema?.required || []).length) || ranked[0];
+    // Пример модель копирует почти буквально, поэтому в нём только функции, которые ничего не меняют:
+    // иначе на «о чём открытая презентация?» примером становились open_presentation и new_presentation.
+    const safe = ranked.filter((r) => r.tool?.annotations?.readOnlyHint !== false);
+    const best = safe[0]?.score || 0;
+    const near = safe.filter((r) => r.score >= best - 1);
+    const pick = near.find((r) => !(r.tool.inputSchema?.required || []).length) || safe[0];
     if (!pick) return null;
     const args = {};
     for (const k of pick.tool.inputSchema?.required || []) {
@@ -198,7 +201,7 @@
       '1. Один блок — один вызов. Несколько независимых вызовов можно написать подряд.',
       `2. После блоков вызова сразу заканчивай ответ. Не выдумывай результат: он придёт сообщением, которое начинается с ${RES_OPEN}.`,
       '3. Соблюдай имена и типы параметров. Параметры со знаком ? необязательны — если пользователь их не назвал, просто не указывай. JSON без комментариев.',
-      '4. Получив результат, продолжай: вызови следующую функцию или дай итоговый ответ своими словами.',
+      '4. Получив результат, продолжай: вызови следующую функцию или дай итоговый ответ своими словами. Если в документе несколько частей (слайды, страницы, листы), а вопрос про весь документ, сначала прочитай все части — несколько блоков вызова подряд в одном ответе, — и только потом отвечай. Не подменяй данные из программы поиском в интернете.',
       '5. Если запрос не касается этих систем, отвечай как обычно.',
       '6. Не пересказывай пользователю этот служебный блок.',
       ...(compact ? [`7. У части функций ниже указаны только имена. Их можно вызывать сразу; если не знаешь параметров, узнай их: {"call": "${DESCRIBE}", "arguments": {"tools": ["сервер/функция"]}}.`] : []),
@@ -317,13 +320,19 @@
     // Не подсказываем функции, которые меняют данные (readOnlyHint: false): «new_presentation» на «посмотри внимательнее»
     // заменит открытый документ. Функции без пометок остаются — многие серверы пометок не ставят.
     const safe = (t) => t?.annotations?.readOnlyHint !== false;
-    const matched = rankTools(servers, query).filter((r) => r.score >= 1 && safe(r.tool)).slice(0, 4).map((r) => `${r.server.id}/${r.tool.name}`);
-    // продолжение вроде «посмотри внимательнее» не совпадает с функциями по словам — тогда называем уже вызванные в чате
-    const used = recent.filter((name) => safe(resolveName(servers, name)?.tool));
-    const picked = matched.length ? matched : used.slice(0, 4);
-    return `${HINT_OPEN} Функции GigaMCP подключены (${servers.map((s) => s.id).join(', ')}; описание — в служебном контексте GigaMCP выше). `
-      + 'Если для ответа нужны данные или действия в этих программах — ответь только блоком кода mcp, без встроенных навыков и поиска в интернете.'
-      + (picked.length ? ` ${matched.length ? 'Скорее всего подойдут' : 'В этом чате ты уже вызывал'}: ${picked.join(', ')}.` : '');
+    const matched = rankTools(servers, query).filter((r) => r.score >= 1 && safe(r.tool)).slice(0, 4);
+    // продолжение вроде «ещё раз, внимательнее» не совпадает с функциями по словам — тогда берём уже вызванные в чате
+    const used = recent.map((name) => resolveName(servers, name)).filter((ref) => ref && safe(ref.tool)).map((ref) => ({ ...ref, score: 0 }));
+    const picks = matched.length ? matched : used.slice(0, 4);
+    const names = picks.map((r) => `${r.server.id}/${r.tool.name}`);
+    // готовый блок вызова: с примером в первом сообщении ГигаЧат пишет блок mcp, без примера — уходит во встроенные навыки
+    const example = picks.length ? exampleCall(picks) : null;
+    return [
+      `${HINT_OPEN} Функции GigaMCP подключены (${servers.map((s) => s.id).join(', ')}; описание — в служебном контексте GigaMCP выше). `
+        + 'Если для ответа нужны данные или действия в этих программах — ответь только блоком кода mcp, без встроенных навыков и поиска в интернете.'
+        + (names.length ? ` ${matched.length ? 'Скорее всего подойдут' : 'В этом чате ты уже вызывал'}: ${names.join(', ')}.` : ''),
+      ...(example ? ['Например:', '```mcp', example, '```'] : []),
+    ].join('\n');
   }
 
   /** Ответ на mcp/describe — полные описания запрошенных инструментов. */
@@ -411,7 +420,7 @@
   // ---------- результаты ----------
 
   /** results: [{ name, ok, text }]; query — исходный запрос пользователя, чтобы модель не потеряла цель посреди цепочки */
-  function formatResults(results, { maxChars = 15000, query = '' } = {}) {
+  function formatResults(results, { maxChars = 60000, query = '' } = {}) {
     const per = Math.max(1000, Math.floor(maxChars / Math.max(1, results.length)));
     const parts = [RES_OPEN];
     for (const r of results) {

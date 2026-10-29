@@ -41,9 +41,14 @@
       return `Готово: ${m ? m[1] : '?'}`;
     }
     if (user.startsWith('[MCP-НАПОМИНАНИЕ]')) {
+      if (/все слайды/i.test(user)) return '```mcp\n{"call": "test/echo", "arguments": {"text": "все слайды прочитаны"}}\n```';
       if (/документ/i.test(user)) return '```mcp\n{"call": "test/echo", "arguments": {"text": "документ сохранён"}}\n```';
       return '```mcp\n{"call": "test/echo", "arguments": {"text": "задача 1"}}\n```';
     }
+    // как в настоящем ГигаЧате: «Думаю над ответом» с шагами встроенных навыков по кругу
+    if (/все слайды/i.test(user)) return { loop: 40, steps: ['Завершил поиск подходящих навыков', 'Узнал дату и время', 'Ошибка при вызове инструмента'] };
+    // обычное «исследование»: много поисков, но без ошибок — останавливать нельзя
+    if (/исследуй/i.test(user)) return { loop: 3, steps: ['Завершил поиск подходящих навыков', 'Завершил поиск подходящих навыков', 'Нашёл информацию в интернете'], text: 'Исследование готово.' };
     if (/создай документ/i.test(user)) {
       return '```mcp\n{"call": "test/echo", "arguments": {"text": "черновик"}}\n```';
     }
@@ -64,7 +69,10 @@
     }
     return 'Обычный ответ без инструментов.';
   }
-  async function stream(text) {
+  let stopped = false;
+  window.__stopped = false;
+  stop.addEventListener('click', () => { stopped = true; window.__stopped = true; });
+  async function stream(reply) {
     const wrap = document.createElement('div');
     wrap.className = 'Message-styled__Bot';
     const body = document.createElement('div');
@@ -72,8 +80,26 @@
     wrap.appendChild(body);
     msgs.appendChild(wrap);
     stop.hidden = false;
+    stopped = false;
+    if (reply.loop) {
+      // разметка шагов — как на giga.chat: ToolCallLogBlock → LogTimeline-styled__ItemLabel
+      const log = document.createElement('div');
+      log.className = 'ToolCallLogBlock-styled__ToolCallLogBlockRoot-sc-1 x';
+      wrap.insertBefore(log, body);
+      const steps = reply.steps;
+      for (let i = 0; i < reply.loop * steps.length && !stopped; i++) {
+        const row = document.createElement('div');
+        row.className = 'LogTimeline-styled__ItemBlock-sc-2 y';
+        row.innerHTML = `<span class="LogTimeline-styled__ItemLabel-sc-3 z">${steps[i % steps.length]}</span>`;
+        log.appendChild(row);
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      if (reply.text && !stopped) body.innerHTML = md(reply.text);
+      stop.hidden = true;
+      return;
+    }
     let acc = '';
-    for (const ch of text.match(/.{1,6}/gs)) { acc += ch; body.innerHTML = md(acc); await new Promise((r) => setTimeout(r, 25)); }
+    for (const ch of reply.match(/.{1,6}/gs)) { acc += ch; body.innerHTML = md(acc); await new Promise((r) => setTimeout(r, 25)); }
     stop.hidden = true;
   }
   async function send() {
