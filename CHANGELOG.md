@@ -54,6 +54,7 @@
 - Логотип «Машиночитаемая реплика» и иконки расширения.
 - Тесты: MCP-клиент, OAuth, мост и протокол на Node; e2e с настоящим расширением в Chromium.
 
+[0.2.4]: https://github.com/VolkovIlia/gigamcp/releases/tag/v0.2.4
 [0.2.3]: https://github.com/VolkovIlia/gigamcp/releases/tag/v0.2.3
 [0.2.2]: https://github.com/VolkovIlia/gigamcp/releases/tag/v0.2.2
 [0.2.1]: https://github.com/VolkovIlia/gigamcp/releases/tag/v0.2.1

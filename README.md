@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="Лицензия MIT" src="https://img.shields.io/badge/license-MIT-21A038"></a>
-  <a href="https://github.com/VolkovIlia/gigamcp/actions/workflows/test.yml"><img alt="Тесты" src="https://github.com/VolkovIlia/gigamcp/actions/workflows/test.yml/badge.svg"></a>
+  <a href="https://github.com/VolkovIlia/gigamcp/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/VolkovIlia/gigamcp/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Chrome 116+" src="https://img.shields.io/badge/Chrome-116%2B-333F48">
   <img alt="Manifest V3" src="https://img.shields.io/badge/Manifest-V3-333F48">
 </p>

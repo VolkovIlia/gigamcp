@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: test/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: npm ci
+      - name: MCP-клиент, OAuth, помощник, протокол
+        run: node node-tests.mjs
+      - name: Установка Chromium
+        run: |
+          npm i --no-save playwright
+          npx playwright install --with-deps chromium
+      - name: E2E с расширением
+        run: node e2e.mjs
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-screenshots
+          path: test/shots/
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Архив расширения
+        id: pack
+        run: echo "zip=$(scripts/pack.sh)" >> "$GITHUB_OUTPUT"
+      - name: Описание релиза из CHANGELOG.md
+        run: scripts/release-notes.sh > dist/notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension
+          path: |
+            ${{ steps.pack.outputs.zip }}
+            dist/notes.md
+          if-no-files-found: error
+
+  # Релиз выходит, когда в main попадает новая версия из extension/manifest.json:
+  # тег vX.Y.Z ставится на этот коммит, к релизу прикладывается архив из build.
+  release:
+    needs: [test, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Версия
+        id: v
+        run: |
+          v=$(jq -r .version extension/manifest.json)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          # Тег проверяем на origin: checkout делает неглубокий клон без тегов.
+          # Код 2 — тега нет; любой другой ненулевой код — сбой сети или доступа.
+          rc=0
+          git ls-remote --exit-code --tags origin "refs/tags/v$v" > /dev/null || rc=$?
+          case $rc in
+            0) echo "Тег v$v уже есть — пропускаю"; echo "new=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "new=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$rc" ;;
+          esac
+      - uses: actions/download-artifact@v4
+        if: steps.v.outputs.new == 'true'
+        with:
+          name: extension
+          path: dist
+      - name: Публикация
+        if: steps.v.outputs.new == 'true'
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          gh release create "v$V" "dist/gigamcp-extension-v$V.zip" \
+            --title "GigaMCP $V" --notes-file dist/notes.md --target "$GITHUB_SHA"
