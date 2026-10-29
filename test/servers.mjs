@@ -17,9 +17,11 @@ export function makeServer(label = 'test') {
   return s;
 }
 
-function mountStreamable(app, path, { json = false, label, guard } = {}) {
+function mountStreamable(app, path, { json = false, label, guard, strictOrigin = false } = {}) {
   const transports = {};
   app.all(path, async (req, res) => {
+    // как FastMCP с защитой от DNS rebinding: чужой Origin → 403
+    if (strictOrigin && req.headers.origin) return res.status(403).send('Invalid Origin header');
     if (guard && !guard(req, res)) return;
     const sid = req.headers['mcp-session-id'];
     let t = sid && transports[sid];
@@ -134,7 +136,7 @@ export function startOAuth(port, { consent = false } = {}) {
     }
     return true;
   };
-  mountStreamable(app, '/mcp', { label: 'oauth', guard });
+  mountStreamable(app, '/mcp', { label: 'oauth', guard, strictOrigin: true });
   return new Promise((r) => { const srv = app.listen(port, () => r({ srv, log, tokens })); });
 }
 

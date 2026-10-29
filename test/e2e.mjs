@@ -14,7 +14,7 @@ const EXT = join(here, '../extension');
 const SHOTS = process.env.SHOTS || join(here, 'shots');
 const mock = readFileSync(join(here, 'mock-gigachat.html'), 'utf8');
 
-const http = await startStreamable(4301);
+const http = await startStreamable(4301, { strictOrigin: true });
 const oauth = await startOAuth(4304, { consent: true });
 const cfgDir = mkdtempSync(join(tmpdir(), 'gmcp-e2e-'));
 writeFileSync(join(cfgDir, 'servers.json'), JSON.stringify({ mcpServers: { demo: { command: process.execPath, args: [join(here, 'stdio-server.mjs')] } } }));

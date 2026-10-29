@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [SemVer](https://semver.org/lang/ru/).
 
+## [0.2.1] — 2026-10-29
+
+### Исправлено
+- «Вход выполнен, но доступ запрещён (403)» на серверах с защитой от DNS rebinding (FastMCP и др., в том числе Taska): они отклоняли заголовок `Origin: chrome-extension://…`. Теперь фон расширения обращается к MCP-серверам без `Origin`, как настольные клиенты.
+- В тексте ошибки 403 показывается причина из ответа сервера.
+
 ## [0.2.0] — 2026-10-29
 
 ### Добавлено
@@ -29,5 +35,6 @@
 - Логотип «Машиночитаемая реплика» и иконки расширения.
 - Тесты: MCP-клиент, OAuth, мост и протокол на Node; e2e с настоящим расширением в Chromium.
 
+[0.2.1]: https://github.com/VolkovIlia/gigamcp/releases/tag/v0.2.1
 [0.2.0]: https://github.com/VolkovIlia/gigamcp/releases/tag/v0.2.0
 [0.1.0]: https://github.com/VolkovIlia/gigamcp/releases/tag/v0.1.0

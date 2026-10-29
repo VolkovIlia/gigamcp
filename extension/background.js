@@ -19,6 +19,18 @@ const DEFAULT_SETTINGS = {
 
 const clients = new Map(); // id -> McpClient
 
+// Запросы фона к MCP-серверам уходят без заголовка Origin — как у настольных клиентов (Claude Desktop, Cursor).
+// Иначе серверы с защитой от DNS rebinding (FastMCP и др.) отвечают 403 «Invalid Origin header» на chrome-extension://…
+// Правило действует только на запросы без вкладки (фон расширения), страницы сайтов оно не трогает.
+const rulesReady = chrome.declarativeNetRequest.updateSessionRules({
+  removeRuleIds: [1],
+  addRules: [{
+    id: 1, priority: 1,
+    action: { type: 'modifyHeaders', requestHeaders: [{ header: 'origin', operation: 'remove' }] },
+    condition: { tabIds: [chrome.tabs.TAB_ID_NONE], resourceTypes: ['xmlhttprequest', 'other'] },
+  }],
+}).catch((e) => console.warn('GigaMCP: правило для Origin не установлено', e));
+
 // ---------- хранилище ----------
 
 let lock = Promise.resolve();
@@ -72,6 +84,7 @@ function publicServer(s) {
 }
 
 async function headersFor(id) {
+  await rulesReady;
   const { servers, secrets } = await load();
   const s = servers.find((x) => x.id === id);
   const sec = secrets[id] || {};

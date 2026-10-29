@@ -206,7 +206,8 @@ export class McpClient {
     if (res.status === 401 || res.status === 403) {
       const www = res.headers.get('www-authenticate') || '';
       let text = ''; try { text = await res.text(); } catch {}
-      throw new McpError(res.status === 401 ? 'Требуется авторизация' : 'Доступ запрещён (403)', {
+      const detail = (text.match(/"(?:detail|error_description|message|error)"\s*:\s*"([^"]{1,200})"/) || [])[1] || text.replace(/<[^>]+>/g, ' ').trim().slice(0, 160);
+      throw new McpError(res.status === 401 ? 'Требуется авторизация' : `Доступ запрещён (403)${detail ? ': ' + detail : ''}`, {
         status: res.status, authRequired: res.status === 401 || /invalid_token|insufficient_scope/.test(www), wwwAuthenticate: www, data: text.slice(0, 500),
       });
     }
