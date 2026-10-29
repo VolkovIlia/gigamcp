@@ -18,8 +18,11 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: test/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
       - run: npm ci
-      - name: MCP-клиент, OAuth, мост, протокол
+      - name: MCP-клиент, OAuth, помощник, протокол
         run: node node-tests.mjs
       - name: Установка Chromium
         run: |

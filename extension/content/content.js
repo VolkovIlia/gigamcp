@@ -44,7 +44,7 @@
   let dead = false; // контекст расширения потерян (расширение перезагружено)
   const entries = new Map(); // key -> entry (вызовы в одном ответе)
   const textSeen = new WeakMap(); // el -> {text, at}
-  const ui = { open: false, expanded: new Set(), addOpen: false, bridgeOpen: false, busy: new Set(), form: { name: '', url: '', authType: 'auto', token: '', clientId: '', clientSecret: '' }, bridge: { url: 'http://127.0.0.1:3939', token: '' }, msg: null };
+  const ui = { open: false, expanded: new Set(), addOpen: false, localOpen: false, importOpen: false, busy: new Set(), form: { name: '', url: '', authType: 'auto', token: '', clientId: '', clientSecret: '' }, local: { name: '', command: '', args: '', env: '', cwd: '' }, importText: '', host: null, msg: null };
 
   const doneKey = 'gmcp:done';
   const doneSet = new Set(JSON.parse(sessionStorage.getItem(doneKey) || '[]'));
@@ -392,7 +392,7 @@
     .btn[disabled] { opacity: .5; cursor: default; }
     .muted { color: var(--fg2); }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
-    input[type=text], input[type=url], input[type=password], select { width: 100%; padding: 7px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg2); color: var(--fg); font: inherit; }
+    input[type=text], input[type=url], input[type=password], select, textarea { width: 100%; padding: 7px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg2); color: var(--fg); font: inherit; }
     select option { color: #111; }
     .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; background: var(--fg2); }
     .dot.ok { background: var(--acc); } .dot.error { background: var(--err); } .dot.auth { background: var(--warn); }
@@ -596,7 +596,7 @@
     let h = `<div class="srv" data-id="${esc(s.id)}">
       <div class="srv-h">
         <span class="dot ${esc(s.status)}" aria-hidden="true"></span>
-        <div class="srv-name"><b>${esc(s.name)}</b><small>${esc(s.id)} · ${busy ? 'обновляю…' : esc(statusText)}${s.source === 'bridge' ? ' · локальный' : ''}</small></div>
+        <div class="srv-name"><b>${esc(s.name)}</b><small>${esc(s.id)} · ${busy ? 'обновляю…' : esc(statusText)}${s.transport === 'stdio' ? ' · локальная программа' : ''}</small></div>
         ${s.status === 'auth' && s.authType !== 'bearer' ? `<button class="btn small primary" data-act="auth">Войти</button>` : ''}
         <button class="icon-btn" data-act="refresh" title="Обновить список инструментов" aria-label="Обновить">${ICON.refresh}</button>
         <button class="sw" role="switch" aria-checked="${!!s.enabled}" data-act="toggle-server" aria-label="Включить сервер ${esc(s.name)}"></button>
@@ -604,7 +604,8 @@
       </div>`;
     if (s.lastError && s.status !== 'ok') h += `<div class="err">${esc(s.lastError)}</div>`;
     if (open) {
-      h += `<div class="srv-b"><div class="hint mono" style="word-break:break-all">${esc(s.url)}${s.transportUsed ? ` · ${s.transportUsed === 'sse' ? 'SSE' : 'Streamable HTTP'}` : ''}</div>`;
+      const where = s.transport === 'stdio' ? `$ ${[s.command, ...(s.args || [])].join(' ')}` : `${s.url}${s.transportUsed ? ` · ${s.transportUsed === 'sse' ? 'SSE' : 'Streamable HTTP'}` : ''}`;
+      h += `<div class="srv-b"><div class="hint mono" style="word-break:break-all">${esc(where)}</div>`;
       if (total) {
         h += `<div class="actions"><button class="btn small" data-act="all-on">Включить все</button><button class="btn small" data-act="all-off">Выключить все</button></div><div class="tools">`;
         for (const t of s.tools) {
@@ -658,12 +659,25 @@
             <div class="hint">Адрес возврата для регистрации: <code>${esc(state.redirectUri)}</code></div></div></details>` : ''}
           <div class="actions"><button class="btn primary" data-act="add" ${ui.busy.has('add') ? 'disabled' : ''}>${ui.busy.has('add') ? 'Подключаю…' : 'Подключить'}</button></div>
         </div>` : ''}
-        <button class="toggle-sec" data-act="toggle-bridge" aria-expanded="${ui.bridgeOpen}">${ui.bridgeOpen ? '−' : '+'} Локальные серверы (stdio) через мост</button>
-        ${ui.bridgeOpen ? `<div class="add">
-          <div class="hint">Запустите на компьютере <code>node gigamcp-bridge.mjs</code> — он покажет адрес и токен. Все серверы из его конфига появятся здесь.</div>
-          <input type="url" data-field="bridgeUrl" value="${esc(ui.bridge.url)}" aria-label="Адрес моста">
-          <input type="password" data-field="bridgeToken" placeholder="Токен моста" value="${esc(ui.bridge.token)}" aria-label="Токен моста">
-          <div class="actions"><button class="btn primary" data-act="bridge" ${ui.busy.has('bridge') ? 'disabled' : ''}>${ui.busy.has('bridge') ? 'Импортирую…' : 'Импортировать серверы'}</button></div>
+        <button class="toggle-sec" data-act="toggle-local" aria-expanded="${ui.localOpen}">${ui.localOpen ? '−' : '+'} Локальная программа (stdio)</button>
+        ${ui.localOpen ? `<div class="add">
+          <div class="hint">${ui.host == null ? 'Локальные программы запускает помощник на Python 3. Он ставится один раз, без прав администратора.'
+            : ui.host.ok ? `Помощник установлен (v${esc(ui.host.version)}, Python ${esc(ui.host.python)}).`
+            : 'Помощник не найден. Установите его один раз из папки расширения: <code>python3 host/install-host.py</code>'}
+            <button class="btn small" data-act="host-check" style="margin-left:6px">Проверить помощник</button></div>
+          <input type="text" data-field="l_name" placeholder="Название, например WordCraft" value="${esc(ui.local.name)}" aria-label="Название">
+          <input type="text" data-field="l_command" placeholder="Команда, например wordcraft-cli" value="${esc(ui.local.command)}" aria-label="Команда">
+          <input type="text" data-field="l_args" placeholder="Аргументы, например mcp" value="${esc(ui.local.args)}" aria-label="Аргументы">
+          <details><summary class="hint">Переменные окружения и рабочая папка</summary>
+            <div style="display:grid;gap:6px;margin-top:6px"><textarea data-field="l_env" rows="3" placeholder="КЛЮЧ=значение, по одной на строку" aria-label="Переменные окружения">${esc(ui.local.env)}</textarea>
+            <input type="text" data-field="l_cwd" placeholder="Рабочая папка (необязательно)" value="${esc(ui.local.cwd)}" aria-label="Рабочая папка"></div></details>
+          <div class="actions"><button class="btn primary" data-act="add-local" ${ui.busy.has('add-local') ? 'disabled' : ''}>${ui.busy.has('add-local') ? 'Запускаю…' : 'Подключить'}</button></div>
+        </div>` : ''}
+        <button class="toggle-sec" data-act="toggle-import" aria-expanded="${ui.importOpen}">${ui.importOpen ? '−' : '+'} Импорт конфига (Claude Desktop, Cursor)</button>
+        ${ui.importOpen ? `<div class="add">
+          <div class="hint">Вставьте JSON с разделом <code>mcpServers</code>: и программы (command/args), и адреса (url) добавятся разом.</div>
+          <textarea data-field="importText" rows="6" class="mono" placeholder='{"mcpServers": {"wordcraft": {"command": "wordcraft-cli", "args": ["mcp"]}}}' aria-label="Конфиг">${esc(ui.importText)}</textarea>
+          <div class="actions"><button class="btn primary" data-act="import" ${ui.busy.has('import') ? 'disabled' : ''}>${ui.busy.has('import') ? 'Импортирую…' : 'Импортировать'}</button></div>
         </div>` : ''}
       </div>
       <div class="ft"><span class="muted">${ctx.toolCount ? `Контекст: ${ctx.toolCount} инстр., ~${Math.round(ctx.text.length / 100) / 10}k символов${ctx.compact ? ' (сжатый)' : ''}` : 'Нет активных инструментов'}</span>
@@ -678,8 +692,8 @@
     const k = e.target.getAttribute('data-field');
     if (!k) return;
     if (k in ui.form) ui.form[k] = e.target.value;
-    if (k === 'bridgeUrl') ui.bridge.url = e.target.value;
-    if (k === 'bridgeToken') ui.bridge.token = e.target.value;
+    if (k.startsWith('l_')) ui.local[k.slice(2)] = e.target.value;
+    if (k === 'importText') ui.importText = e.target.value;
   }
 
   function onPanelChange(e) {
@@ -692,6 +706,23 @@
       el.checked ? dis.delete(el.dataset.tool) : dis.add(el.dataset.tool);
       bg('updateServer', { id, patch: { disabledTools: [...dis] } }).catch((err) => flash(err.message, 'error'));
     }
+  }
+
+  function splitArgs(str) {
+    const out = []; let cur = '', q = null, any = false;
+    for (const ch of String(str || '')) {
+      if (q) { if (ch === q) q = null; else cur += ch; }
+      else if (ch === '"' || ch === "'") { q = ch; any = true; }
+      else if (/\s/.test(ch)) { if (cur || any) out.push(cur); cur = ''; any = false; }
+      else cur += ch;
+    }
+    if (cur || any) out.push(cur);
+    return out;
+  }
+
+  async function checkHost() {
+    try { ui.host = await bg('hostStatus'); } catch (e) { ui.host = { ok: false, error: e.message }; }
+    renderPanel();
   }
 
   function authError(err) {
@@ -719,7 +750,9 @@
         case 'toggle-auto': await bg('saveSettings', { patch: { autoRun: !st.autoRun } }); break;
         case 'toggle-send': await bg('saveSettings', { patch: { autoSend: !st.autoSend } }); break;
         case 'toggle-add': ui.addOpen = !ui.addOpen; renderPanel(); break;
-        case 'toggle-bridge': ui.bridgeOpen = !ui.bridgeOpen; renderPanel(); break;
+        case 'toggle-local': ui.localOpen = !ui.localOpen; if (ui.localOpen && !ui.host) checkHost(); renderPanel(); break;
+        case 'toggle-import': ui.importOpen = !ui.importOpen; renderPanel(); break;
+        case 'host-check': await checkHost(); break;
         case 'expand': ui.expanded.has(id) ? ui.expanded.delete(id) : ui.expanded.add(id); renderPanel(); break;
         case 'toggle-server': await bg('updateServer', { id, patch: { enabled: !s.enabled } }); break;
         case 'refresh': await withBusy(id, async () => { const r = await bg('refreshServer', { id }); flash(r.ok ? `«${s.name}»: список инструментов обновлён` : r.error, r.ok ? 'ok' : 'error'); }); break;
@@ -755,14 +788,26 @@
           });
           break;
         }
-        case 'bridge': await withBusy('bridge', async () => {
-          const r = await bg('importBridge', { url: ui.bridge.url.trim(), token: ui.bridge.token.trim() });
+        case 'add-local': {
+          const l = ui.local;
+          if (!l.command.trim()) { flash('Укажите команду', 'error'); break; }
+          await withBusy('add-local', async () => {
+            const env = {};
+            for (const line of l.env.split('\n')) { const i = line.indexOf('='); if (i > 0) env[line.slice(0, i).trim()] = line.slice(i + 1).trim(); }
+            const r = await bg('addServer', { name: l.name.trim(), transport: 'stdio', command: l.command.trim(), args: splitArgs(l.args), env, cwd: l.cwd.trim() });
+            if (r.error) { ui.expanded.add(r.id); flash(r.error, 'error'); if (/помощник/i.test(r.error)) ui.host = { ok: false }; }
+            else { ui.local = { name: '', command: '', args: '', env: '', cwd: '' }; ui.localOpen = false; flash('Программа подключена', 'ok'); }
+          });
+          break;
+        }
+        case 'import': await withBusy('import', async () => {
+          const r = await bg('importConfig', { text: ui.importText });
           const parts = [];
           if (r.added.length) parts.push(`добавлено: ${r.added.join(', ')}`);
-          if (r.skipped.length) parts.push(`уже были: ${r.skipped.join(', ')}`);
+          if (r.skipped.length) parts.push(`пропущено: ${r.skipped.join(', ')}`);
           if (r.failed.length) parts.push(`ошибки: ${r.failed.join('; ')}`);
-          flash(parts.join(' · ') || 'Мост не вернул ни одного сервера', r.failed.length ? 'error' : 'ok');
-          if (r.added.length) ui.bridgeOpen = false;
+          flash(parts.join(' · ') || 'В конфиге нет серверов', r.failed.length ? 'error' : 'ok');
+          if (r.added.length) { ui.importOpen = false; ui.importText = ''; }
         }); break;
         case 'insert-ctx': {
           const ctx = currentContext();

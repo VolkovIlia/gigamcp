@@ -38,6 +38,9 @@
       const m = user.match(/успешно\n([^\n]+)/);
       return `Готово: ${m ? m[1] : '?'}`;
     }
+    if (/демо/i.test(user)) {
+      return 'Спрошу локальную программу.\n```mcp\n{"call": "demo/add", "arguments": {"a": 7, "b": 8}}\n```';
+    }
     if (/посчитай|сколько/i.test(user)) {
       return 'Сейчас посчитаю.\n```mcp\n{"call": "test/add", "arguments": {"a": 2, "b": 3}}\n```';
     }

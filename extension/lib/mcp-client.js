@@ -1,5 +1,6 @@
 // Минимальный MCP-клиент без зависимостей.
-// Транспорты: Streamable HTTP (2025-03-26 / 2025-06-18) с откатом на старый HTTP+SSE (2024-11-05).
+// Транспорты: Streamable HTTP (2025-03-26 / 2025-06-18) с откатом на старый HTTP+SSE (2024-11-05),
+// а также локальные stdio-программы через помощник Native Messaging (extension/host/).
 // Работает и в service worker расширения, и в Node 18+ (для тестов).
 
 export const PROTOCOL_VERSION = '2025-06-18';
@@ -62,7 +63,7 @@ export class McpClient {
    * @param {typeof fetch} [o.fetchImpl]
    * @param {number} [o.timeoutMs]
    */
-  constructor({ url, getHeaders = () => ({}), transport = 'auto', fetchImpl, timeoutMs = 120000 }) {
+  constructor({ url, getHeaders = () => ({}), transport = 'auto', fetchImpl, timeoutMs = 120000, stdio = null, nativeConnect = null }) {
     this.url = url;
     this.getHeaders = getHeaders;
     this.transportPref = transport;
@@ -76,6 +77,9 @@ export class McpClient {
     this.instructions = null;
     this._id = 1;
     this._sse = null; // состояние legacy SSE
+    this.stdio = stdio; // {command, args, env, cwd} — локальная программа через помощник
+    this.nativeConnect = nativeConnect; // () => порт Native Messaging
+    this._native = null;
   }
 
   get connected() { return !!this.transport; }
@@ -84,6 +88,7 @@ export class McpClient {
     if (this.transport) return this;
     const pref = this.transportPref;
     if (pref === 'sse') { await this._connectSSE(); return this; }
+    if (pref === 'native') { await this._connectNative(); return this; }
     try {
       await this._initHttp();
     } catch (e) {
@@ -120,6 +125,7 @@ export class McpClient {
       } catch {}
     }
     if (this._sse) { try { this._sse.abort.abort(); } catch {} }
+    if (this._native) { try { this._native.port.disconnect(); } catch {} this._native = null; }
     this.transport = null; this.sessionId = null; this._sse = null;
   }
 
@@ -129,11 +135,12 @@ export class McpClient {
     if (!this.transport && method !== 'initialize') await this.connect();
     const msg = { jsonrpc: '2.0', id: this._id++, method, params };
     try {
+      if (this.transport === 'native') return await this._nativeRequest(msg);
       return this.transport === 'sse' ? await this._sseRequest(msg) : await this._httpRequest(msg);
     } catch (e) {
       // Сессия протухла (404 на Streamable HTTP или упавший SSE-поток) — переподключаемся один раз.
       if (!_retried && method !== 'initialize' && (e.sessionExpired || e.streamClosed)) {
-        this.transport = null; this.sessionId = null; this._sse = null;
+        this.transport = null; this.sessionId = null; this._sse = null; this._native = null;
         await this.connect();
         return this.request(method, params, { _retried: true });
       }
@@ -254,6 +261,83 @@ export class McpClient {
       if (e?.name === 'AbortError' || t.ac.signal.aborted) throw new McpError(`Таймаут запроса ${msg.method}`);
       throw e;
     } finally { t.done(); }
+  }
+
+  // ---------- локальная программа (stdio) через помощник Native Messaging ----------
+
+  async _connectNative() {
+    if (!this.nativeConnect || !this.stdio?.command) throw new McpError('Не указана команда локальной программы');
+    let port;
+    try { port = this.nativeConnect(); } catch (e) { throw new McpError(e.message || String(e), { hostMissing: true }); }
+    const state = { port, pending: new Map(), closed: false, chunks: new Map(), logs: [], exitInfo: null };
+    this._native = state;
+    let spawnOk, spawnFail;
+    const spawned = new Promise((r, j) => { spawnOk = r; spawnFail = j; });
+    const fail = (err) => {
+      state.closed = true;
+      spawnFail(err);
+      for (const p of state.pending.values()) p.reject(err);
+      state.pending.clear();
+      if (this._native === state) { this.transport = null; this._native = null; }
+    };
+    const onRpc = (m) => {
+      for (const one of Array.isArray(m) ? m : [m]) {
+        if (one.id !== undefined && ('result' in one || 'error' in one)) {
+          const p = state.pending.get(one.id);
+          if (p) { state.pending.delete(one.id); p.resolve(one); }
+        } else if (one.method && one.id !== undefined) {
+          try { port.postMessage({ type: 'msg', data: this._answerServerRequest(one) }); } catch {}
+        }
+      }
+    };
+    port.onMessage.addListener((m) => {
+      if (!m || typeof m !== 'object') return;
+      if (m.type === 'msg') onRpc(m.data);
+      else if (m.type === 'chunk') {
+        const buf = state.chunks.get(m.id) || [];
+        buf[m.i] = m.part; state.chunks.set(m.id, buf);
+        if (buf.filter((x) => x !== undefined).length === m.n) {
+          state.chunks.delete(m.id);
+          try { onRpc(JSON.parse(buf.join(''))); } catch {}
+        }
+      } else if (m.type === 'spawned') spawnOk(m);
+      else if (m.type === 'log') { state.logs.push(m.line); state.logs.splice(0, state.logs.length - 30); }
+      else if (m.type === 'error') fail(new McpError(m.message));
+      else if (m.type === 'exit') {
+        state.exitInfo = m;
+        const tail = (m.stderr || state.logs.slice(-3).join('\n')).trim();
+        fail(new McpError(`Программа завершилась (код ${m.code})${tail ? ': ' + tail.slice(-400) : ''}`, { streamClosed: true }));
+      }
+    });
+    port.onDisconnect.addListener(() => {
+      const le = (typeof chrome !== 'undefined' && chrome.runtime?.lastError?.message) || '';
+      if (!state.closed) {
+        const missing = /not found|не найден/i.test(le);
+        fail(new McpError(missing
+          ? 'Помощник для локальных программ не установлен. Выполните: python3 <папка расширения>/host/install-host.py'
+          : `Соединение с помощником закрыто${le ? ': ' + le : ''}`, { hostMissing: missing, streamClosed: !missing }));
+      }
+    });
+    const { command, args = [], env = {}, cwd = '' } = this.stdio;
+    port.postMessage({ type: 'spawn', command, args, env, cwd });
+    const t = setTimeout(() => fail(new McpError('Помощник не ответил за 20 с')), 20000);
+    try { await spawned; } finally { clearTimeout(t); }
+    this.transport = 'native';
+    const init = await this._nativeRequest({ jsonrpc: '2.0', id: this._id++, method: 'initialize', params: this._initParams() }, 60000);
+    this._applyInit(init);
+    port.postMessage({ type: 'msg', data: { jsonrpc: '2.0', method: 'notifications/initialized' } });
+  }
+
+  async _nativeRequest(msg, timeoutMs = this.timeoutMs) {
+    const s = this._native;
+    if (!s || s.closed) throw new McpError('Программа не запущена', { streamClosed: true });
+    const reply = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => { s.pending.delete(msg.id); reject(new McpError(`Таймаут запроса ${msg.method}`)); }, timeoutMs);
+      s.pending.set(msg.id, { resolve: (v) => { clearTimeout(t); resolve(v); }, reject: (e) => { clearTimeout(t); reject(e); } });
+      try { s.port.postMessage({ type: 'msg', data: msg }); } catch (e) { clearTimeout(t); s.pending.delete(msg.id); reject(new McpError(e.message, { streamClosed: true })); }
+    });
+    if (reply.error) throw new McpError(reply.error.message || 'Ошибка MCP', { code: reply.error.code, data: reply.error.data });
+    return reply.result;
   }
 
   // ---------- Legacy HTTP+SSE ----------

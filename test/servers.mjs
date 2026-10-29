@@ -12,6 +12,7 @@ export function makeServer(label = 'test') {
     async ({ a, b }) => ({ content: [{ type: 'text', text: String(a + b) }] }));
   s.tool('echo', 'Вернуть текст.', { text: z.string(), upper: z.boolean().optional() },
     async ({ text, upper }) => ({ content: [{ type: 'text', text: upper ? text.toUpperCase() : text }] }));
+  s.tool('big', 'Вернуть длинный текст.', { n: z.number() }, async ({ n }) => ({ content: [{ type: 'text', text: 'Ж'.repeat(n) }] }));
   s.tool('fail', 'Всегда ошибка.', {}, async () => ({ isError: true, content: [{ type: 'text', text: 'Сломалось нарочно' }] }));
   return s;
 }
@@ -88,6 +89,7 @@ export function startOAuth(port, { consent = false } = {}) {
     if (consent) {
       // как у Taska: страница согласия с кодом подтверждения
       const art = Buffer.from(JSON.stringify(q)).toString('base64url');
+      res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
       return res.type('html').send(`<!doctype html><meta charset="utf-8"><title>Согласие</title><form method="post" action="/auth/consent">
         <input type="hidden" name="art" value="${art}"><label>Код подтверждения <input name="code" id="code"></label>
         <button name="decision" value="allow">Разрешить</button></form>`);
@@ -105,6 +107,7 @@ export function startOAuth(port, { consent = false } = {}) {
     if (req.body.code !== '123456') {
       return res.status(400).type('html').send('<!doctype html><meta charset="utf-8"><title>Ошибка</title><p id="err">Неверный код подтверждения</p>');
     }
+    res.set('Content-Security-Policy', "default-src 'none'; form-action 'self'");
     issue(JSON.parse(Buffer.from(req.body.art, 'base64url').toString()), res);
   });
   app.post('/auth/token', (req, res) => {

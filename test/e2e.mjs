@@ -4,7 +4,7 @@ import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { startStreamable, startOAuth } from './servers.mjs';
 
@@ -18,9 +18,12 @@ const http = await startStreamable(4301);
 const oauth = await startOAuth(4304, { consent: true });
 const cfgDir = mkdtempSync(join(tmpdir(), 'gmcp-e2e-'));
 writeFileSync(join(cfgDir, 'servers.json'), JSON.stringify({ mcpServers: { demo: { command: process.execPath, args: [join(here, 'stdio-server.mjs')] } } }));
-const bridge = spawn(process.execPath, [join(here, '../bridge/gigamcp-bridge.mjs'), '--config', join(cfgDir, 'servers.json'), '--port', '4310', '--token', 'tok-e2e'], { stdio: 'ignore' });
 
-const ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), 'gmcp-prof-')), {
+
+const profile = mkdtempSync(join(tmpdir(), 'gmcp-prof-'));
+// помощник для локальных программ ставится в профиль браузера — как у пользователя, без администратора
+spawnSync('python3', [join(here, '../extension/host/install-host.py'), '--browser-dir', profile], { stdio: 'ignore' });
+const ctx = await chromium.launchPersistentContext(profile, {
   channel: 'chromium', headless: true, viewport: { width: 1280, height: 860 }, locale: 'ru-RU',
   args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
 });
@@ -54,8 +57,8 @@ try {
   await panel.locator('[data-field=authType]').selectOption('none');
   await panel.getByRole('button', { name: 'Подключить' }).click();
   await panel.getByText('Сервер подключён').waitFor({ timeout: 15000 });
-  await page.waitForFunction(() => document.querySelector('[data-gmcp=chip]').shadowRoot.querySelector('.badge').textContent === '3');
-  ok('сервер добавлен из панели, 3 инструмента');
+  await page.waitForFunction(() => document.querySelector('[data-gmcp=chip]').shadowRoot.querySelector('.badge').textContent === '4');
+  ok('сервер добавлен из панели, 4 инструмента');
   await panel.locator('.srv [data-act=expand]').first().click();
   await page.screenshot({ path: join(SHOTS, 'panel.png') });
 
@@ -128,23 +131,42 @@ try {
   await popup.getByRole('button', { name: 'Разрешить' }).click();
   await panel.getByText('Сервер подключён').waitFor({ timeout: 20000 });
   assert.ok(oauth.log.some((l) => l[0] === 'token'));
-  await page.waitForFunction(() => document.querySelector('[data-gmcp=chip]').shadowRoot.querySelector('.badge').textContent === '6');
+  await page.waitForFunction(() => document.querySelector('[data-gmcp=chip]').shadowRoot.querySelector('.badge').textContent === '8');
   ok('OAuth: верный код → токен, окно закрылось само, сервер подключён');
 
-  // мост для stdio
-  await panel.getByText('Локальные серверы (stdio) через мост').click();
-  await panel.locator('[data-field=bridgeUrl]').fill('http://127.0.0.1:4310');
-  await panel.locator('[data-field=bridgeToken]').fill('tok-e2e');
-  await panel.getByRole('button', { name: 'Импортировать серверы' }).click();
-  await panel.getByText('добавлено: demo').waitFor({ timeout: 20000 });
-  ok('мост: stdio-сервер demo импортирован');
+  // локальная программа (stdio) через помощник Native Messaging
+  await panel.getByText('Локальная программа (stdio)').click();
+  await panel.getByText(/Помощник установлен/).waitFor({ timeout: 10000 });
+  await panel.locator('[data-field=l_name]').fill('Demo');
+  await panel.locator('[data-field=l_command]').fill(process.execPath);
+  await panel.locator('[data-field=l_args]').fill(`"${join(here, 'stdio-server.mjs')}"`);
+  await panel.getByRole('button', { name: 'Подключить' }).click();
+  await panel.getByText('Программа подключена').waitFor({ timeout: 20000 });
+  ok('локальная программа подключена через помощник Native Messaging');
+
+  // импорт конфига Claude Desktop
+  await panel.getByText('Импорт конфига').click();
+  await panel.locator('[data-field=importText]').fill(JSON.stringify({ mcpServers: { calc2: { command: process.execPath, args: [join(here, 'stdio-server.mjs'), '--calc2'], env: { X: '1' } }, web: { url: 'http://127.0.0.1:4301/mcp' } } }));
+  await panel.getByRole('button', { name: 'Импортировать' }).click();
+  await panel.getByText(/добавлено: calc2/).waitFor({ timeout: 20000 });
+  ok('импорт конфига: программа добавлена, уже подключённый адрес пропущен');
+
+  // вызов инструмента локальной программы из чата
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => { window.__sent = []; });
+  await page.locator('#chat-input-textarea').fill('Посчитай через демо 7 + 8');
+  await page.keyboard.press('Enter');
+  await page.getByText('Готово: 15').waitFor({ timeout: 30000 });
+  const sentDemo = await page.evaluate(() => window.__sent);
+  assert.match(sentDemo[0], /\[MCP-КОНТЕКСТ v1 #/, 'набор инструментов изменился — контекст обновлён');
+  assert.match(sentDemo[0], /demo\/add/);
+  ok('вызов инструмента локальной программы из чата (авто-режим): 7 + 8 = 15');
   await page.waitForTimeout(300);
   await page.screenshot({ path: join(SHOTS, 'panel-all.png') });
 } catch (e) {
   await fail(e, page);
 } finally {
   await ctx.close();
-  bridge.kill();
   http.srv.close(); oauth.srv.close();
 }
 process.exit(process.exitCode || 0);

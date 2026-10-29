@@ -21,7 +21,7 @@
 
 > Неофициальный проект. Не связан со Сбером и командой ГигаЧата. «ГигаЧат» и «GigaChat» — товарные знаки их владельцев.
 
-*English:* GigaMCP is an unofficial open-source Chrome extension that brings Model Context Protocol (MCP) tool servers to the GigaChat web UI (giga.chat). Add a server by URL (Streamable HTTP or SSE, bearer token or OAuth 2.1), or run local stdio servers through the bundled bridge. MIT licensed.
+*English:* GigaMCP is an unofficial open-source Chrome extension that brings Model Context Protocol (MCP) tool servers to the GigaChat web UI (giga.chat). Add a server by URL (Streamable HTTP or SSE, bearer token or OAuth 2.1), or run local stdio programs (e.g. `wordcraft-cli mcp`) through a tiny per-user Python helper launched by the browser via Native Messaging — no Node, no admin rights. MIT licensed.
 
 <p align="center">
   <img src="docs/tool-call.png" alt="Вызов инструмента в чате" width="720">
@@ -31,7 +31,8 @@
 
 - **Серверы по адресу:** Streamable HTTP и старый HTTP+SSE (откат происходит сам).
 - **Авторизация:** без неё, Bearer-токен или OAuth 2.1 со своим окном входа, как у коннекторов claude.ai: обнаружение сервера авторизации, динамическая регистрация клиента, PKCE.
-- **Локальные stdio-серверы** (`npx`, `uvx` и т. п.) через маленький мост на Node без зависимостей, конфиг в формате Claude Desktop.
+- **Локальные программы (stdio)**, например `wordcraft-cli mcp`: их запускает сам браузер через маленький помощник на Python 3 без зависимостей. Node и права администратора не нужны.
+- **Импорт конфига** Claude Desktop, Cursor и VS Code (`mcpServers`).
 - **Подтверждение вызовов:** у каждого вызова карточка с кнопками «Выполнить» и «Отклонить», есть авто-режим с защитой от бесконечного цикла.
 - **Выбор инструментов:** лишние можно выключить галочками. Для больших серверов включается сжатый каталог.
 - **Аккуратная история:** служебные сообщения в чате сворачиваются в плашки.
@@ -60,17 +61,26 @@ ID расширения постоянный — `mmjnppnijhblimofghdejjdhfgdjgc
 | Со входом | «Определить автоматически». Откроется окно входа сервера; если там просят код подтверждения, введите его прямо в окне |
 | Без динамической регистрации клиентов | «Свой client_id», адрес возврата `https://mmjnppnijhblimofghdejjdhfgdjgcol.chromiumapp.org/oauth` |
 
-### Локальные stdio-серверы
+### Локальные программы (stdio)
 
-Браузер не умеет запускать программы, поэтому для stdio-серверов есть мост (нужен Node 18+):
+Многие MCP-серверы — это программы, которые общаются через stdin/stdout: `wordcraft-cli mcp`, `npx …`, `uvx …`. Расширение запускает их через помощник на Python 3. Он входит в архив расширения и ставится один раз от обычного пользователя, без администратора (Python 3 уже есть в Astra Linux, РЕД ОС, Ubuntu и macOS):
 
 ```bash
-cd bridge
-cp servers.example.json servers.json   # формат как у Claude Desktop
-node gigamcp-bridge.mjs --config servers.json
+python3 <папка расширения>/host/install-host.py
 ```
 
-Мост покажет адрес (`http://127.0.0.1:3939`) и токен. В панели откройте **Локальные серверы (stdio) через мост**, вставьте их и нажмите «Импортировать»: появятся все серверы из конфига.
+Скрипт кладёт помощник в `~/.local/share/gigamcp` и регистрирует его в найденных браузерах: Chrome, Chromium, Яндекс Браузер, Edge, Brave, Vivaldi, Opera. Отдельно запускать ничего не нужно: браузер сам стартует помощник, когда он понадобится.
+
+Дальше в панели: **MCP → Локальная программа (stdio)**. Например, для [WordCraft](https://github.com/storytold/wordcraft/blob/main/docs/mcp.md):
+
+| Поле | Значение |
+|---|---|
+| Команда | `wordcraft-cli` (или полный путь) |
+| Аргументы | `mcp` |
+
+Чтобы управлять уже открытым окном WordCraft, запустите его с `--control 7981`, а в аргументах укажите `mcp --connect 127.0.0.1:7981`.
+
+Если серверы уже описаны в конфиге Claude Desktop или Cursor, вставьте его в **Импорт конфига**: добавятся все сразу. Удалить помощник: `python3 host/install-host.py --uninstall`.
 
 <br clear="right">
 
@@ -92,9 +102,9 @@ extension/
   lib/oauth.js         OAuth 2.1: RFC 9728 / 8414 / 7591, PKCE, resource indicator
   content/protocol.js  текстовый протокол: контекст, разбор вызовов, результаты
   content/content.js   интерфейс в giga.chat: кнопка, панель, карточки
-bridge/                мост stdio → HTTP
+  host/                помощник для локальных программ (Python, Native Messaging)
 brand/                 логотип и правила его использования
-test/                  тесты: клиент, OAuth, мост, протокол, e2e в Chromium
+test/                  тесты: клиент, OAuth, помощник, протокол, e2e в Chromium
 ```
 
 Все селекторы вёрстки giga.chat собраны в объекте `SEL` в начале `content/content.js`. Если интерфейс ГигаЧата изменится, править нужно только там.
@@ -108,13 +118,13 @@ test/                  тесты: клиент, OAuth, мост, протоко
 
 ## Безопасность
 
-Расширение просит доступ ко всем адресам (`<all_urls>`), чтобы обращаться к MCP-серверам по любому адресу без ограничений CORS. Интерфейс встраивается только в giga.chat. Токены хранятся в `chrome.storage.local` вашего браузера и никуда, кроме самих серверов, не отправляются. Подробнее — в [SECURITY.md](SECURITY.md).
+Расширение просит доступ ко всем адресам (`<all_urls>`), чтобы обращаться к MCP-серверам по любому адресу без ограничений CORS, `nativeMessaging` — для помощника локальных программ и `webRequest` — чтобы прочитать код OAuth из ответа сервера. Интерфейс встраивается только в giga.chat. Токены хранятся в `chrome.storage.local` вашего браузера и никуда, кроме самих серверов, не отправляются. Подробнее — в [SECURITY.md](SECURITY.md).
 
 ## Разработка
 
 ```bash
 cd test && npm install
-node node-tests.mjs   # MCP-клиент, OAuth, мост, протокол
+node node-tests.mjs   # MCP-клиент, OAuth, помощник, протокол (нужен python3)
 npm i --no-save playwright && npx playwright install chromium
 node e2e.mjs          # настоящее расширение в Chromium + макет giga.chat
 ```

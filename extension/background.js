@@ -4,6 +4,8 @@ import { beginOAuthFlow, completeOAuthFlow, refreshAccessToken } from './lib/oau
 
 // Адрес возврата OAuth. Он же «Redirect URI» для ручной регистрации клиента.
 const REDIRECT_URI = `https://${chrome.runtime.id}.chromiumapp.org/oauth`;
+// Помощник для локальных программ (stdio), см. extension/host/
+const HOST_NAME = 'ru.gigamcp.host';
 
 const DEFAULT_SETTINGS = {
   enabled: true,          // MCP включён в чате
@@ -96,7 +98,16 @@ async function getClient(id) {
   const { servers, settings } = await load();
   const s = servers.find((x) => x.id === id);
   if (!s) throw new McpError('Сервер не найден');
-  c = new McpClient({ url: s.url, transport: s.transport || 'auto', getHeaders: () => headersFor(id), timeoutMs: settings.toolTimeoutSec * 1000 });
+  if (s.transport === 'stdio') {
+    const { secrets } = await load();
+    c = new McpClient({
+      transport: 'native', timeoutMs: settings.toolTimeoutSec * 1000,
+      stdio: { command: s.command, args: s.args || [], cwd: s.cwd || '', env: secrets[id]?.env || {} },
+      nativeConnect: () => chrome.runtime.connectNative(HOST_NAME),
+    });
+  } else {
+    c = new McpClient({ url: s.url, transport: s.transport || 'auto', getHeaders: () => headersFor(id), timeoutMs: settings.toolTimeoutSec * 1000 });
+  }
   clients.set(id, c);
   return c;
 }
@@ -156,21 +167,29 @@ const handlers = {
     return { servers: servers.map(publicServer), settings, redirectUri: REDIRECT_URI };
   },
 
-  async addServer({ name, url, authType = 'auto', token, headers, clientId, clientSecret, transport = 'auto', source = 'manual' }) {
-    try { const u = new URL(url); if (!/^https?:$/.test(u.protocol)) throw 0; } catch { throw new McpError('Некорректный адрес. Нужен http(s)://…'); }
+  async addServer({ name, url, authType = 'auto', token, headers, clientId, clientSecret, transport = 'auto', source = 'manual', command, args, env, cwd }) {
+    const stdio = transport === 'stdio';
+    if (stdio) {
+      if (!String(command || '').trim()) throw new McpError('Укажите команду, например wordcraft-cli');
+    } else {
+      try { const u = new URL(url); if (!/^https?:$/.test(u.protocol)) throw 0; } catch { throw new McpError('Некорректный адрес. Нужен http(s)://…'); }
+    }
+    const base = stdio ? (name || String(command).split(/[\\/]/).pop()) : name;
     const id = await mutate(async () => {
       const { servers } = await load();
-      let id = slugify(name, url), n = 2;
-      while (servers.some((s) => s.id === id)) id = `${slugify(name, url)}_${n++}`;
+      let id = slugify(base, url || 'http://local'), n = 2;
+      const first = id;
+      while (servers.some((s) => s.id === id)) id = `${first}_${n++}`;
       servers.push({
-        id, name: name || id, url, transport, source,
-        authType: authType === 'auto' ? (token ? 'bearer' : 'none') : authType,
+        id, name: name || base || id, transport, source,
+        ...(stdio ? { command: String(command).trim(), args: (args || []).map(String), cwd: cwd || '' } : { url }),
+        authType: stdio ? 'none' : authType === 'auto' ? (token ? 'bearer' : 'none') : authType,
         enabled: true, disabledTools: [], tools: [], status: 'unknown', lastError: null, createdAt: Date.now(),
       });
       await saveServers(servers);
       return id;
     });
-    await patchSecret(id, { token: token || null, headers: headers || {}, manualClient: clientId ? { clientId, clientSecret: clientSecret || null } : null });
+    await patchSecret(id, { token: token || null, headers: headers || {}, env: env || {}, manualClient: clientId ? { clientId, clientSecret: clientSecret || null } : null });
     try { await refreshServer(id); } catch (e) { return { id, error: e.message, needsAuth: !!e.authRequired }; }
     return { id };
   },
@@ -253,23 +272,44 @@ const handlers = {
     }
   },
 
-  async importBridge({ url, token }) {
-    const base = String(url || '').replace(/\/+$/, '');
-    let list;
-    try {
-      const r = await fetch(`${base}/servers`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-      if (r.status === 401) throw new McpError('Мост отклонил токен (401)');
-      if (!r.ok) throw new McpError(`Мост ответил HTTP ${r.status}`);
-      list = (await r.json()).servers || [];
-    } catch (e) {
-      throw new McpError(e instanceof McpError ? e.message : `Мост недоступен по адресу ${base}. Он запущен? (${e.message})`);
-    }
+  async hostStatus() {
+    return new Promise((resolve) => {
+      let port;
+      const done = (r) => { try { port?.disconnect(); } catch {} resolve(r); };
+      try { port = chrome.runtime.connectNative(HOST_NAME); } catch (e) { return done({ ok: false, error: e.message }); }
+      const t = setTimeout(() => done({ ok: false, error: 'Помощник не ответил' }), 5000);
+      port.onMessage.addListener((m) => { if (m?.type === 'hello') { clearTimeout(t); done({ ok: true, version: m.version, python: m.python }); } });
+      port.onDisconnect.addListener(() => { clearTimeout(t); done({ ok: false, error: chrome.runtime.lastError?.message || 'Помощник закрыл соединение' }); });
+      port.postMessage({ type: 'hello' });
+    });
+  },
+
+  /** Импорт конфига в формате Claude Desktop / Cursor / VS Code: { "mcpServers": { name: {command,args,env} | {url,headers} } }. */
+  async importConfig({ text }) {
+    let cfg;
+    try { cfg = JSON.parse(text); } catch (e) { throw new McpError('Это не JSON: ' + e.message); }
+    const map = cfg.mcpServers || cfg.servers || (cfg.mcp && cfg.mcp.servers) || cfg;
+    if (!map || typeof map !== 'object' || Array.isArray(map)) throw new McpError('Не нашёл раздел mcpServers');
     const { servers } = await load();
     const added = [], skipped = [], failed = [];
-    for (const it of list) {
-      if (servers.some((s) => s.url === it.url)) { skipped.push(it.name); continue; }
-      const r = await handlers.addServer({ name: it.name, url: it.url, authType: token ? 'bearer' : 'none', token, source: 'bridge' });
-      (r.error ? failed : added).push(it.name + (r.error ? `: ${r.error}` : ''));
+    for (const [name, it] of Object.entries(map)) {
+      if (!it || typeof it !== 'object' || it.disabled) { skipped.push(name); continue; }
+      try {
+        let r;
+        if (it.command) {
+          if (servers.some((s) => s.transport === 'stdio' && s.command === it.command && JSON.stringify(s.args || []) === JSON.stringify(it.args || []))) { skipped.push(name); continue; }
+          r = await handlers.addServer({ name, transport: 'stdio', command: it.command, args: it.args || [], env: it.env || {}, cwd: it.cwd || '', source: 'import' });
+        } else if (it.url || it.serverUrl) {
+          const url = it.url || it.serverUrl;
+          if (servers.some((s) => s.url === url)) { skipped.push(name); continue; }
+          const headers = { ...(it.headers || {}) };
+          let token = '';
+          const auth = Object.keys(headers).find((k) => k.toLowerCase() === 'authorization');
+          if (auth && /^Bearer\s+/i.test(headers[auth])) { token = headers[auth].replace(/^Bearer\s+/i, ''); delete headers[auth]; }
+          r = await handlers.addServer({ name, url, authType: token ? 'bearer' : 'auto', token, headers, transport: /sse/i.test(it.type || '') ? 'sse' : 'auto', source: 'import' });
+        } else { skipped.push(name); continue; }
+        (r.error && !r.needsAuth ? failed : added).push(name + (r.error ? ` (${r.needsAuth ? 'нужен вход' : r.error})` : ''));
+      } catch (e) { failed.push(`${name}: ${e.message}`); }
     }
     return { added, skipped, failed };
   },
@@ -332,6 +372,17 @@ async function finishAuth(redirectedUrl) {
     rejectWaiter(p.state, e);
   }
 }
+
+// Код авторизации ловим прямо из заголовка Location ответа сервера. Некоторые серверы (например, Taska)
+// отдают страницу согласия с CSP form-action 'self', и Chrome блокирует переход на адрес возврата после
+// отправки формы, — но заголовок ответа к этому моменту уже получен.
+chrome.webRequest.onHeadersReceived.addListener((d) => {
+  if (d.statusCode < 300 || d.statusCode >= 400) return;
+  const loc = (d.responseHeaders || []).find((h) => h.name.toLowerCase() === 'location')?.value;
+  if (!loc) return;
+  let abs; try { abs = new URL(loc, d.url).toString(); } catch { return; }
+  if (abs.startsWith(REDIRECT_URI)) finishAuth(abs);
+}, { urls: ['<all_urls>'], types: ['main_frame'] }, ['responseHeaders']);
 
 // Слушатели зарегистрированы на верхнем уровне, поэтому вход завершится, даже если фон перезапускался.
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {

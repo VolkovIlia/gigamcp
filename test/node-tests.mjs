@@ -1,7 +1,7 @@
-// Проверка MCP-клиента, OAuth, моста и протокола в Node.
+// Проверка MCP-клиента, OAuth, помощника для локальных программ и протокола в Node.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { writeFileSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +28,7 @@ servers.push(oauth.srv);
 async function basicFlow(url, transportExpected) {
   const c = new McpClient({ url });
   const tools = await c.listTools();
-  assert.deepEqual(tools.map((t) => t.name).sort(), ['add', 'echo', 'fail']);
+  assert.deepEqual(tools.map((t) => t.name).sort(), ['add', 'big', 'echo', 'fail']);
   assert.equal(c.transport, transportExpected);
   const r = await c.callTool('add', { a: 2, b: 40 });
   assert.equal(resultToText(r), '42');
@@ -85,30 +85,60 @@ await test('Обновление токена по refresh_token', async () => {
   assert.ok(t.accessToken && t.accessToken !== oauthState.tokens.accessToken);
 });
 
-console.log('Мост stdio → HTTP');
-await test('Импорт списка, вызовы, токен, защита Host/Origin', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'gmcp-'));
-  const cfg = join(dir, 'servers.json');
-  writeFileSync(cfg, JSON.stringify({ mcpServers: { demo: { command: process.execPath, args: [join(here, 'stdio-server.mjs')] }, 'bad name': { command: 'x' } } }));
-  const proc = spawn(process.execPath, [join(here, '../bridge/gigamcp-bridge.mjs'), '--config', cfg, '--port', '4210', '--token', 'secret123'], { stdio: ['ignore', 'pipe', 'pipe'] });
-  let out = ''; proc.stdout.on('data', (d) => (out += d)); proc.stderr.on('data', (d) => (out += d));
-  try {
-    for (let i = 0; i < 50 && !out.includes('готов'); i++) await new Promise((r) => setTimeout(r, 100));
-    assert.match(out, /Токен:\s+secret123/);
-    const unauth = await fetch('http://127.0.0.1:4210/servers');
-    assert.equal(unauth.status, 401);
-    const evil = await fetch('http://127.0.0.1:4210/servers', { headers: { Authorization: 'Bearer secret123', Origin: 'https://evil.example' } });
-    assert.equal(evil.status, 403);
-    const list = await (await fetch('http://127.0.0.1:4210/servers', { headers: { Authorization: 'Bearer secret123' } })).json();
-    assert.deepEqual(list.servers.map((s) => s.name), ['demo']);
-    const c = new McpClient({ url: list.servers[0].url, getHeaders: () => ({ Authorization: 'Bearer secret123' }) });
-    const tools = await c.listTools();
-    assert.equal(tools.length, 3);
-    assert.equal(resultToText(await c.callTool('add', { a: 20, b: 22 })), '42');
-    // второй клиент переиспользует уже инициализированный процесс
-    const c2 = new McpClient({ url: list.servers[0].url, getHeaders: () => ({ Authorization: 'Bearer secret123' }) });
-    assert.equal(resultToText(await c2.callTool('echo', { text: 'ok', upper: true })), 'OK');
-  } finally { proc.kill(); }
+console.log('Помощник для локальных программ (Native Messaging)');
+// Порт в стиле chrome.runtime.Port поверх процесса помощника: 4 байта длины + JSON
+function hostPort() {
+  const proc = spawn('python3', [join(here, '../extension/host/gigamcp_host.py')], { stdio: ['pipe', 'pipe', 'inherit'] });
+  const msgL = [], discL = [];
+  let buf = Buffer.alloc(0);
+  proc.stdout.on('data', (d) => {
+    buf = Buffer.concat([buf, d]);
+    while (buf.length >= 4) {
+      const n = buf.readUInt32LE(0);
+      if (buf.length < 4 + n) break;
+      const m = JSON.parse(buf.subarray(4, 4 + n).toString('utf8'));
+      assert.ok(n <= 1024 * 1024, 'кадр не больше 1 МБ');
+      buf = buf.subarray(4 + n);
+      msgL.forEach((f) => f(m));
+    }
+  });
+  proc.on('exit', () => discL.forEach((f) => f()));
+  return {
+    proc,
+    postMessage(m) { const b = Buffer.from(JSON.stringify(m)); const h = Buffer.alloc(4); h.writeUInt32LE(b.length); proc.stdin.write(Buffer.concat([h, b])); },
+    onMessage: { addListener: (f) => msgL.push(f) },
+    onDisconnect: { addListener: (f) => discL.push(f) },
+    disconnect() { proc.stdin.end(); },
+  };
+}
+await test('hello, запуск программы, вызовы, ответ больше 1 МБ по частям', async () => {
+  const hello = await new Promise((resolve) => { const p = hostPort(); p.onMessage.addListener((m) => { p.disconnect(); resolve(m); }); p.postMessage({ type: 'hello' }); });
+  assert.equal(hello.type, 'hello');
+  const c = new McpClient({ transport: 'native', stdio: { command: process.execPath, args: [join(here, 'stdio-server.mjs')] }, nativeConnect: hostPort });
+  const tools = await c.listTools();
+  assert.equal(c.transport, 'native');
+  assert.ok(tools.some((t) => t.name === 'add'));
+  assert.equal(resultToText(await c.callTool('add', { a: 40, b: 2 })), '42');
+  const big = resultToText(await c.callTool('big', { n: 1500000 }));
+  assert.equal(big.length, 1500000);
+  await c.close();
+});
+await test('понятная ошибка, если программы нет', async () => {
+  const c = new McpClient({ transport: 'native', stdio: { command: 'no-such-mcp-program' }, nativeConnect: hostPort });
+  const e = await c.listTools().catch((x) => x);
+  assert.match(e.message, /Не удалось запустить «no-such-mcp-program»/);
+});
+await test('установка без прав администратора и удаление', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gmcp-prof-'));
+  const run = (args) => new Promise((resolve) => { const p = spawn('python3', [join(here, '../extension/host/install-host.py'), ...args]); let o = ''; p.stdout.on('data', (d) => (o += d)); p.on('exit', (code) => resolve({ code, o })); });
+  const r = await run(['--browser-dir', dir]);
+  assert.equal(r.code, 0, r.o);
+  const m = JSON.parse(readFileSync(join(dir, 'NativeMessagingHosts', 'ru.gigamcp.host.json'), 'utf8'));
+  assert.deepEqual(m.allowed_origins, ['chrome-extension://mmjnppnijhblimofghdejjdhfgdjgcol/']);
+  assert.ok(existsSync(m.path));
+  const u = await run(['--uninstall', '--browser-dir', dir]);
+  assert.equal(u.code, 0);
+  assert.equal(existsSync(join(dir, 'NativeMessagingHosts', 'ru.gigamcp.host.json')), false);
 });
 
 console.log('Протокол');
