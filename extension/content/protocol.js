@@ -98,6 +98,9 @@
     ['таблиц', 'sheet table spreadsheet cell'], ['ячейк', 'cell'], ['текст', 'text document'], ['страниц', 'page'], ['изображен', 'image'],
     ['картин', 'image picture'], ['скриншот', 'screenshot'], ['погод', 'weather'], ['курс', 'rate currency'],
     ['сегодн', 'today agenda'], ['завтр', 'tomorrow agenda'], ['недел', 'week agenda'], ['план', 'plan agenda'],
+    ['слайд', 'slide'], ['презентац', 'presentation deck slide'], ['абзац', 'paragraph text'], ['диаграм', 'chart'], ['график', 'chart'],
+    ['посмотр', 'inspect get show view read'], ['прочит', 'read get inspect'], ['провер', 'inspect check get'], ['сохран', 'save'],
+    ['откр', 'open'], ['экспорт', 'export'], ['печат', 'print export'],
   ];
 
   const STOP = new Set(['мои', 'мой', 'моя', 'мне', 'меня', 'это', 'как', 'что', 'для', 'все', 'всё', 'ещё', 'еще', 'так', 'дай', 'ну', 'the', 'and', 'for']);
@@ -266,6 +269,7 @@
   // ---------- отказ модели пользоваться инструментами ----------
 
   const NUDGE_OPEN = '[MCP-НАПОМИНАНИЕ]';
+  const HINT_OPEN = '[MCP-ПОДСКАЗКА]';
   // \p{L}, а не \w: в JS \w — только латиница, и «Ошибка» не совпало бы с «ошибк\w*»
   const REFUSAL_RE = /(нет|не имею|не получил\p{L}*|отсутству\p{L}*)\s+(прямого\s+|никакого\s+)?доступ\p{L}*|не могу\s+(получить|посмотреть|показать|просмотреть|открыть|прочитать|подключ\p{L}+|зайти)|у меня нет (возможности|информации о тво|сведений о тво)|не имею возможности|don't have access|no access to your/iu;
 
@@ -298,11 +302,28 @@
     const example = exampleCall(picked) || '{"call": "сервер/функция", "arguments": {}}';
     return [
       NUDGE_OPEN,
-      'У тебя есть доступ к данным пользователя через внешние функции GigaMCP (см. [MCP-КОНТЕКСТ] выше). Это не встроенные навыки: не ищи навыков и не задавай вопросов формой — просто напиши блок кода mcp с вызовом.',
+      'У тебя есть доступ к данным пользователя через внешние функции GigaMCP (см. служебный контекст GigaMCP выше). Это не встроенные навыки: не ищи навыков и не задавай вопросов формой — просто напиши блок кода mcp с вызовом.',
       top.length ? `Скорее всего подойдут: ${top.join(', ')}.` : '',
       query ? `Запрос пользователя был: ${clip(query, 300)}` : '',
       'Ответь только блоком вызова, например:\n```mcp\n' + example + '\n```',
     ].filter(Boolean).join('\n');
+  }
+
+  /**
+   * Короткая подсказка к каждому сообщению пользователя, когда контекст уже в чате: в продолжении диалога
+   * ГигаЧат забывает о функциях и уходит во встроенные навыки и поиск в интернете.
+   */
+  function buildHint(servers, query, recent = []) {
+    // Не подсказываем функции, которые меняют данные (readOnlyHint: false): «new_presentation» на «посмотри внимательнее»
+    // заменит открытый документ. Функции без пометок остаются — многие серверы пометок не ставят.
+    const safe = (t) => t?.annotations?.readOnlyHint !== false;
+    const matched = rankTools(servers, query).filter((r) => r.score >= 1 && safe(r.tool)).slice(0, 4).map((r) => `${r.server.id}/${r.tool.name}`);
+    // продолжение вроде «посмотри внимательнее» не совпадает с функциями по словам — тогда называем уже вызванные в чате
+    const used = recent.filter((name) => safe(resolveName(servers, name)?.tool));
+    const picked = matched.length ? matched : used.slice(0, 4);
+    return `${HINT_OPEN} Функции GigaMCP подключены (${servers.map((s) => s.id).join(', ')}; описание — в служебном контексте GigaMCP выше). `
+      + 'Если для ответа нужны данные или действия в этих программах — ответь только блоком кода mcp, без встроенных навыков и поиска в интернете.'
+      + (picked.length ? ` ${matched.length ? 'Скорее всего подойдут' : 'В этом чате ты уже вызывал'}: ${picked.join(', ')}.` : '');
   }
 
   /** Ответ на mcp/describe — полные описания запрошенных инструментов. */
@@ -395,7 +416,11 @@
     const parts = [RES_OPEN];
     for (const r of results) {
       let t = String(r.text ?? '').trim() || (r.ok ? '(пустой результат)' : '(нет описания ошибки)');
-      if (t.length > per) t = t.slice(0, per) + `\n…[обрезано: ещё ${t.length - per} символов]`;
+      // JSON с отступами — в компактный вид: без потерь, а в лимит входит больше данных
+      if (/^[{[]/.test(t)) { try { t = JSON.stringify(JSON.parse(t)); } catch {} }
+      if (t.length > per) {
+        t = t.slice(0, per) + `\n…[обрезано: показано ${per} из ${t.length} символов. Не делай выводов по обрезанному результату: запроси данные частями — меньше объектов за один вызов (например, по одному слайду или странице).]`;
+      }
       parts.push(`▶ ${r.name} — ${r.ok ? 'успешно' : 'ошибка'}`);
       parts.push(t);
       parts.push('');
@@ -412,7 +437,7 @@
   }
 
   const api = {
-    CTX_OPEN, CTX_CLOSE, RES_OPEN, RES_CLOSE, DESCRIBE, NUDGE_OPEN, rankTools, looksLikeRefusal, nudgeReason, buildNudge,
+    CTX_OPEN, CTX_CLOSE, RES_OPEN, RES_CLOSE, DESCRIBE, NUDGE_OPEN, HINT_OPEN, rankTools, looksLikeRefusal, nudgeReason, buildNudge, buildHint,
     hash, typeOf, paramLines, buildContext, describeTools, resolveName,
     tryParseObject, normalizeCall, parseCallText, extractCallsFromText, formatResults, contextSignatureIn,
   };

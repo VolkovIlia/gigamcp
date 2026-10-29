@@ -315,6 +315,31 @@ await test('Результаты и mcp/describe', () => {
   assert.match(t, /обрезано/);
   assert.match(P.describeTools(fakeServers, ['test/add', 'no/pe']), /a: number — первое[\s\S]*no\/pe — не найден/);
 });
+await test('Подсказка к каждому сообщению и большие результаты', () => {
+  const h = P.buildHint(fakeServers, 'Сложи два числа');
+  assert.ok(h.startsWith(P.HINT_OPEN));
+  assert.match(h, /test\/add/, 'подходящая функция названа');
+  assert.match(P.buildHint(fakeServers, 'Ещё раз, внимательнее', ['test/echo']), /уже вызывал: test\/echo/, 'продолжение без совпадений — уже вызванные функции');
+  // функции, меняющие данные (readOnlyHint: false), подсказка не предлагает — ни по словам, ни из уже вызванных
+  const deck = [{ id: 'deck', name: 'Deck', tools: [
+    { name: 'new_presentation', description: 'Start a new presentation.', annotations: { readOnlyHint: false } },
+    { name: 'add_slide', description: 'Add a slide.', annotations: { readOnlyHint: false } },
+    { name: 'inspect_slide', description: 'Inspect a slide.', annotations: { readOnlyHint: true } },
+  ] }];
+  const vague = P.buildHint(deck, 'Ещё раз, внимательнее', ['deck/new_presentation', 'deck/inspect_slide']);
+  assert.match(vague, /уже вызывал: deck\/inspect_slide\.$/);
+  const bySlide = P.buildHint(deck, 'Что на других слайдах?', []);
+  assert.match(bySlide, /deck\/inspect_slide/);
+  assert.doesNotMatch(bySlide + vague, /new_presentation|add_slide/);
+  // JSON ужимается без потерь — в лимит входит больше данных
+  const pretty = JSON.stringify({ shapes: Array.from({ length: 40 }, (_, i) => ({ id: i, text: `ячейка ${i}` })) }, null, 2);
+  const t = P.formatResults([{ name: 'x/y', ok: true, text: pretty }], { maxChars: 100000 });
+  assert.ok(t.includes(JSON.stringify(JSON.parse(pretty))), 'JSON в компактном виде');
+  // обрезанный результат помечен так, что модель знает долю и что запросить остальное нужно частями
+  const cut = P.formatResults([{ name: 'x/y', ok: true, text: 'а'.repeat(5000) }], { maxChars: 2000 });
+  assert.match(cut, /показано 2000 из 5000/);
+  assert.ok(!P.formatResults([{ name: 'x/y', ok: true, text: '{не json' }]).includes('показано'), 'не-JSON и короткое не трогаем');
+});
 await test('Локальная программа: модель знает папки компьютера', () => {
   const pc = { home: '/home/u', documents: '/home/u/Документы', cwd: '/home/u' };
   const remote = P.buildContext(fakeServers);

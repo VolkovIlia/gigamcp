@@ -101,7 +101,9 @@ try {
   await page.locator('form button[aria-label="Отправить"]').click();
   await page.waitForFunction(() => window.__sent.length >= 4, null, { timeout: 20000 });
   const sent = await page.evaluate(() => window.__sent);
-  assert.equal(sent[2], 'А теперь посчитай ещё раз', 'контекст не повторяется');
+  // продолжение диалога: полный контекст не повторяется, но короткая подсказка про функции идёт с каждым сообщением
+  assert.ok(!sent[2].includes('[MCP-КОНТЕКСТ'), 'контекст не повторяется');
+  assert.match(sent[2], /^\[MCP-ПОДСКАЗКА\][\s\S]*test\/add[\s\S]*\n\nЗапрос пользователя:\nА теперь посчитай ещё раз$/);
   assert.match(sent[3], /^\[MCP-РЕЗУЛЬТАТ\]/);
   await page.waitForFunction(() => document.querySelectorAll('.Message-styled__Bot').length === 4);
   ok('авто-режим: вызов выполнен и результат отправлен без клика, контекст не продублирован');

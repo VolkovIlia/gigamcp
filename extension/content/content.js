@@ -179,7 +179,7 @@
     return all;
   }
 
-  const isServiceText = (t) => t.includes(P.CTX_OPEN) || t.includes(P.RES_OPEN) || t.includes(P.NUDGE_OPEN);
+  const isServiceText = (t) => t.includes(P.CTX_OPEN) || t.includes(P.RES_OPEN) || t.includes(P.NUDGE_OPEN) || t.includes(P.HINT_OPEN);
 
   function chatHasContext(signature) {
     for (const m of getMessages()) {
@@ -199,12 +199,18 @@
     return ctx;
   }
 
+  // функции, уже вызванные в этом чате, — последние первыми
+  const recentTools = () => [...new Set([...entries.values()]
+    .filter((e) => e.key.startsWith(location.pathname + '#'))
+    .flatMap((e) => e.calls.map((c) => c.resolved || c.name)).reverse())];
+
+  // Первое сообщение несёт полный контекст, остальные — короткую подсказку: иначе в продолжении диалога
+  // ГигаЧат забывает о функциях и уходит во встроенные навыки и поиск в интернете.
   function injectInto(text) {
+    if (!mcpOn() || isServiceText(text)) return null;
     const ctx = needsContext();
-    if (!ctx) return null;
-    if (isServiceText(text)) return null;
-    const full = P.buildContext(activeServers(), { maxChars: state.settings.contextMaxChars, query: text });
-    return `${full.text}\n\nЗапрос пользователя:\n${text}`;
+    const head = ctx ? P.buildContext(activeServers(), { maxChars: state.settings.contextMaxChars, query: text }).text : P.buildHint(activeServers(), text, recentTools());
+    return `${head}\n\nЗапрос пользователя:\n${text}`;
   }
 
   function onUserSend() { lastSendAt = Date.now(); autoRounds = 0; }
@@ -343,6 +349,7 @@
       if (t.includes(P.NUDGE_OPEN)) return null;
       if (t.includes(P.RES_OPEN)) { afterResult = true; continue; }
       const j = t.lastIndexOf('Запрос пользователя:');
+      // withContext — только полный контекст (первое сообщение): авто-напоминание «не вызвал» уместно лишь сразу после него
       return { query: j >= 0 ? t.slice(j + 20).trim() : t.trim(), withContext: t.includes(P.CTX_OPEN), afterResult };
     }
     return null;
@@ -1042,8 +1049,8 @@
       if (m.role !== 'user') continue;
       if (m.el.querySelector(':scope > .gmcp-tag') || m.el.dataset.gmcpTagged) continue;
       const t = m.el.innerText || '';
-      const isCtx = t.includes(P.CTX_OPEN), isRes = t.includes(P.RES_OPEN), isNudge = t.includes(P.NUDGE_OPEN);
-      if (!isCtx && !isRes && !isNudge) continue;
+      const isCtx = t.includes(P.CTX_OPEN), isRes = t.includes(P.RES_OPEN), isNudge = t.includes(P.NUDGE_OPEN), isHint = t.includes(P.HINT_OPEN);
+      if (!isCtx && !isRes && !isNudge && !isHint) continue;
       // сворачиваем самый глубокий элемент, который содержит весь текст сообщения
       let target = m.el.querySelector(SEL.userBubble) || m.el;
       while (target.children.length === 1 && (target.firstElementChild.innerText || '').length >= t.length * 0.9) target = target.firstElementChild;
@@ -1051,7 +1058,10 @@
       tag.type = 'button';
       tag.className = 'gmcp-tag';
       tag.setAttribute('data-gmcp', 'tag');
-      const label = isCtx ? 'MCP: служебный контекст инструментов' : isRes ? 'MCP: результат инструментов' : 'MCP: напоминание про инструменты';
+      // у контекста и подсказки в плашке виден текст самого пользователя — его сообщение не прячется
+      const j = t.lastIndexOf('Запрос пользователя:');
+      const own = (isCtx || isHint) && j >= 0 ? ` — «${t.slice(j + 20).trim().replace(/\s+/g, ' ').slice(0, 120)}»` : '';
+      const label = (isCtx ? 'MCP: служебный контекст инструментов' : isRes ? 'MCP: результат инструментов' : isHint ? 'MCP: подсказка про функции' : 'MCP: напоминание про инструменты') + own;
       tag.textContent = `${label} · показать`;
       tag.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
