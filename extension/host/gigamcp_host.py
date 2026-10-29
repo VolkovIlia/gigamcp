@@ -138,6 +138,8 @@ def main():
                 send({'type': 'error', 'message': 'Не удалось запустить «%s»: %s. Укажите полный путь к программе.' % (command, e.strerror or e)})
                 proc = None
                 continue
+            # spawned — до потоков: иначе быстрая программа успеет прислать exit (и помощник завершится) раньше
+            send(dict(user_dirs(), type='spawned', pid=proc.pid, path=exe, cwd=cwd))
             pumps = [threading.Thread(target=f, args=(proc,), daemon=True) for f in (pump_stdout, pump_stderr)]
             for t in pumps:
                 t.start()
@@ -150,7 +152,6 @@ def main():
                 send({'type': 'exit', 'code': code, 'stderr': '\n'.join(_stderr_tail[-5:])})
                 os._exit(0)
             threading.Thread(target=wait_exit, args=(proc,), daemon=True).start()
-            send(dict(user_dirs(), type='spawned', pid=proc.pid, path=exe, cwd=cwd))
         elif kind == 'msg':
             if proc is None:
                 send({'type': 'error', 'message': 'Программа не запущена'})
